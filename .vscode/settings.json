@@ -1,0 +1,6 @@
+{
+    "python.defaultInterpreterPath": "/Users/psv/Documents/dev/symcogitant/.venv/bin/python",
+    "python.analysis.extraPaths": [
+        "."
+    ]
+}
