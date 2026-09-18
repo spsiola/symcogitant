@@ -42,12 +42,11 @@ class WebInterfacePlugin(BasePlugin):
         self.event_bus.subscribe(self._handle_event)
 
     async def _handle_event(self, event: dict):
-        if event.get("type") == "log":
-            for ws in list(self.connected_websockets):
-                try:
-                    await ws.send_json(event)
-                except RuntimeError:
-                    self.connected_websockets.remove(ws)
+        for ws in list(self.connected_websockets):
+            try:
+                await ws.send_json(event)
+            except RuntimeError:
+                self.connected_websockets.remove(ws)
 
     async def run(self):
         uvicorn_config = uvicorn.Config(

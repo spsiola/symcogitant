@@ -8,3 +8,15 @@ plugins:
     config:
       host: "127.0.0.1"
       port: 4217
+
+  - module: "src.reflexes.system_monitor.reflex"
+    class: "SystemMonitorReflex"
+    enabled: true
+    config:
+      interval: 60
+      llm_endpoints:
+        ollama: "http://127.0.0.1:11434/"
+        lm_studio: "http://localhost:1234/v1/models"
+        llama_cpp: "http://localhost:8080/v1/models"
+        vllm: "http://localhost:8000/v1/models"
+        jan: "http://localhost:1337/v1/models"
