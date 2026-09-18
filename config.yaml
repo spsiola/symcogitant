@@ -1,0 +1,7 @@
+plugins:
+  - module: "src.plugins.web_interface.plugin"
+    class: "WebInterfacePlugin"
+    enabled: true
+    config:
+      host: "127.0.0.1"
+      port: 4217
