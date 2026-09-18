@@ -1,5 +1,6 @@
 import asyncio
 from abc import ABC, abstractmethod
+import time
 from typing import Any, Dict
 
 class BasePlugin(ABC):
@@ -11,6 +12,7 @@ class BasePlugin(ABC):
         self.event_bus = event_bus
         self.running = False
         self.task: asyncio.Task | None = None
+        self.start_time: float | None = None
 
     @abstractmethod
     async def run(self):
@@ -21,6 +23,7 @@ class BasePlugin(ABC):
         """Запускает плагин как asyncio.Task."""
         if not self.running:
             self.running = True
+            self.start_time = time.time()
             self.task = asyncio.create_task(self.run())
     
     async def stop(self):
@@ -41,3 +44,10 @@ class BasePlugin(ABC):
             "level": level,
             "message": message
         })
+
+    def get_status(self) -> dict:
+        """Возвращает текущий статус плагина."""
+        if self.running and self.start_time:
+            uptime = int(time.time() - self.start_time)
+            return {"status": "alive", "uptime": uptime}
+        return {"status": "stopped", "uptime": 0}

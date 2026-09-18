@@ -1,11 +1,13 @@
 import asyncio
 import os
+
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from src.core.plugin import BasePlugin
+
 
 class WebInterfacePlugin(BasePlugin):
     def __init__(self, config, event_bus):
@@ -30,8 +32,11 @@ class WebInterfacePlugin(BasePlugin):
             try:
                 while True:
                     await websocket.receive_text()
-            except WebSocketDisconnect:
-                self.connected_websockets.remove(websocket)
+            except (WebSocketDisconnect, asyncio.CancelledError):
+                pass
+            finally:
+                if websocket in self.connected_websockets:
+                    self.connected_websockets.remove(websocket)
 
         # Подписка на шину событий
         self.event_bus.subscribe(self._handle_event)
@@ -41,7 +46,7 @@ class WebInterfacePlugin(BasePlugin):
             for ws in list(self.connected_websockets):
                 try:
                     await ws.send_json(event)
-                except Exception:
+                except RuntimeError:
                     self.connected_websockets.remove(ws)
 
     async def run(self):
@@ -57,6 +62,14 @@ class WebInterfacePlugin(BasePlugin):
         await self.server.serve()
 
     async def stop(self):
+        self.running = False
         if hasattr(self, "server") and not self.server.should_exit:
             self.server.should_exit = True
-        await super().stop()
+        
+        # Плавно ждем завершения uvicorn, не вызывая task.cancel(), 
+        # чтобы избежать трейсбеков от внутренних корутин starlette.
+        if self.task:
+            try:
+                await self.task
+            except asyncio.CancelledError:
+                pass

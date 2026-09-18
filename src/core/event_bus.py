@@ -1,12 +1,12 @@
 import asyncio
-from typing import Callable, Awaitable, List
+from typing import Callable, Coroutine, Any, List
 
 class EventBus:
     """Простая шина событий для обмена сообщениями между ядром и плагинами."""
     def __init__(self):
-        self.subscribers: List[Callable[[dict], Awaitable[None]]] = []
+        self.subscribers: List[Callable[[dict], Coroutine[Any, Any, None]]] = []
 
-    def subscribe(self, callback: Callable[[dict], Awaitable[None]]):
+    def subscribe(self, callback: Callable[[dict], Coroutine[Any, Any, None]]):
         self.subscribers.append(callback)
 
     async def publish(self, event: dict):

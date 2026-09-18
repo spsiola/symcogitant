@@ -1,3 +1,6 @@
+core:
+  watchdog_interval: 30
+
 plugins:
   - module: "src.plugins.web_interface.plugin"
     class: "WebInterfacePlugin"
