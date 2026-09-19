@@ -9,6 +9,12 @@ plugins:
       host: "127.0.0.1"
       port: 4217
 
+  - module: "src.plugins.media_telegram_user.plugin"
+    class: "MediaTelegramUserPlugin"
+    enabled: true
+    config:
+      session_path: "data/telegram_user"
+
   - module: "src.reflexes.system_monitor.reflex"
     class: "SystemMonitorReflex"
     enabled: true
