@@ -19,9 +19,12 @@ class SystemMonitorReflex(BasePlugin):
         self.last_metric_data = None
         
         # Preload models to serve immediately
-        self.all_models = list(self.openrouter_popular_models)
+        self.all_models = {
+            "local": [],
+            "cloud": list(self.openrouter_popular_models)
+        }
         
-    def get_models(self) -> list[str]:
+    def get_models(self) -> dict:
         """Returns the current list of available models."""
         return self.all_models
 
@@ -47,7 +50,7 @@ class SystemMonitorReflex(BasePlugin):
         try:
             # We just test the endpoint to see if auth is valid. 
             # For OpenRouter we can hit /v1/models. For OpenAI /v1/models. 
-            response = await client.get(url, headers=headers, timeout=5.0)
+            response = await client.get(url, headers=headers, timeout=10.0)
             if response.status_code == 200:
                 models = hardcoded_models
                 if not models:
@@ -73,7 +76,7 @@ class SystemMonitorReflex(BasePlugin):
         models = ["google/gemini-1.5-pro", "google/gemini-1.5-flash", "google/gemini-1.0-pro"]
         url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
         try:
-            response = await client.get(url, timeout=5.0)
+            response = await client.get(url, timeout=10.0)
             if response.status_code == 200:
                 try:
                     data = response.json()
@@ -106,7 +109,18 @@ class SystemMonitorReflex(BasePlugin):
                 mem_used_gb = mem.used / (1024**3)
                 mem_percent = mem.percent
 
-                # 2. LLM Endpoints
+                # 2. Extract API keys
+                parsed_keys = {}
+                for k, v in self.api_keys.items():
+                    if "_API_KEY" in k:
+                        parts = k.split("_API_KEY", 1)
+                        provider = parts[0].lower()
+                        key_name = parts[1].strip("_") if len(parts) > 1 and parts[1].strip("_") else "default"
+                        if provider not in parsed_keys:
+                            parsed_keys[provider] = []
+                        parsed_keys[provider].append(key_name)
+
+                # 3. LLM Endpoints
                 tasks = []
                 # Local endpoints
                 for name, url in self.endpoints.items():
@@ -125,6 +139,10 @@ class SystemMonitorReflex(BasePlugin):
                 google_key = self.api_keys.get("GOOGLE_API_KEY") or self.api_keys.get("GEMINI_API_KEY")
                 if google_key:
                     tasks.append(self.check_google(client, google_key))
+                    
+                atria_keys = [v for k, v in self.api_keys.items() if k.startswith("ATRIA_API_KEY")]
+                if atria_keys:
+                    tasks.append(self.check_cloud_provider(client, "atria", "https://api.atria-asi.ai/v1/models", {"Authorization": f"Bearer {atria_keys[0]}"}, ["atria/Atria-Dawn-Preview"]))
 
                 results = await asyncio.gather(*tasks) if tasks else []
                 
@@ -145,8 +163,11 @@ class SystemMonitorReflex(BasePlugin):
                             else:
                                 cloud_models.append(m)
                 
-                # Local models first
-                self.all_models = local_models + cloud_models
+                # Keep them as a dict to distinguish in UI easily
+                self.all_models = {
+                    "local": local_models,
+                    "cloud": cloud_models
+                }
 
                 # Construct metric payload
                 metric_data = {
@@ -164,7 +185,8 @@ class SystemMonitorReflex(BasePlugin):
                             "usage_percent": mem_percent
                         },
                         "llms": llms_dict,
-                        "llm_models": self.all_models
+                        "llm_models": self.all_models,
+                        "llm_keys": parsed_keys
                     }
                 }
 

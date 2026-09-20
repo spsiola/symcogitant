@@ -359,25 +359,47 @@ main {
     transform: translateY(-1px);
 }
 
-.chat-model-select {
+.chat-model-select, .chat-key-select {
     background: rgba(15, 23, 42, 0.8);
     border: 1px solid rgba(255, 255, 255, 0.1);
     color: white;
-    padding: 12px 15px;
+    padding: 8px 10px;
     border-radius: 8px;
-    font-size: 0.95rem;
-    outline: none;
+    font-size: 0.85rem;
     cursor: pointer;
+    outline: none;
     font-family: 'Inter', sans-serif;
 }
 
-.chat-model-select:focus {
+.chat-model-select:focus, .chat-key-select:focus {
     border-color: #4f46e5;
 }
 
-.chat-model-select option, .chat-model-select optgroup {
+.chat-key-select:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.chat-model-select option, .chat-model-select optgroup,
+.chat-key-select option, .chat-key-select optgroup {
     background: #1e293b;
     color: white;
+}
+
+.chat-ctx-input {
+    background: rgba(15, 23, 42, 0.8);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: white;
+    padding: 8px 10px;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    outline: none;
+    font-family: 'Inter', sans-serif;
+    width: 180px;
+}
+
+.chat-ctx-input:focus {
+    border-color: #4f46e5;
 }
 
 .chat-header-area {

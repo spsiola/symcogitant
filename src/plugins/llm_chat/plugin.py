@@ -103,6 +103,10 @@ class LLMChatPlugin(BasePlugin):
             }
             if event.get("model"):
                 request_data["model"] = event.get("model")
+            if event.get("num_ctx"):
+                request_data["num_ctx"] = event.get("num_ctx")
+            if event.get("api_key_name"):
+                request_data["api_key_name"] = event.get("api_key_name")
                 
             await self.event_bus.publish(request_data)
             

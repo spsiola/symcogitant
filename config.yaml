@@ -43,6 +43,7 @@ plugins:
       base_url: "http://127.0.0.1:11434/v1"
       api_key: "ollama"
       default_model: "qwen2.5-coder:7b"
+      num_ctx: 8192
 
   - module: "src.plugins.llm_chat.plugin"
     class: "LLMChatPlugin"

@@ -25,8 +25,8 @@ class LLMReflex(BasePlugin):
         
         # Default local client
         self.local_client = AsyncOpenAI(
-            base_url=self.default_base_url,
-            api_key=self.default_api_key
+            base_url=self.config.get("local_api_base", self.default_base_url),
+            api_key=self.config.get("local_api_key", self.default_api_key)
         )
         
         # Cloud clients initialized lazily or proactively
@@ -43,8 +43,28 @@ class LLMReflex(BasePlugin):
         self.event_bus.subscribe(self._handle_event)
         await self.emit_log(f"LLM Reflex started. Default Base URL: {self.default_base_url}")
         
+        self.running = True
         while self.running:
             await asyncio.sleep(1)
+
+    def _resolve_api_key(self, provider_prefix: str, api_key_name: str = None) -> str:
+        """Resolves the API key from .env based on provider and optional name."""
+        prefix = f"{provider_prefix.upper()}_API_KEY"
+        if api_key_name and api_key_name != "default":
+            key = self.api_keys.get(f"{prefix}_{api_key_name}")
+            if key:
+                return key
+        
+        # Fallback to default key or the first one available
+        key = self.api_keys.get(prefix)
+        if key:
+            return key
+            
+        # Try to find any key starting with prefix
+        for k, v in self.api_keys.items():
+            if k.startswith(prefix):
+                return v
+        return None
 
     async def _handle_event(self, event: dict):
         if event.get("type") == "llm_request":
@@ -120,13 +140,14 @@ class LLMReflex(BasePlugin):
 
             elif model.startswith("openrouter/"):
                 actual_model = model.replace("openrouter/", "")
-                if not self.api_keys.get("OPENROUTER_API_KEY"):
+                api_key = self._resolve_api_key("openrouter", event.get("api_key_name"))
+                if not api_key:
                     raise Exception("OpenRouter API key not configured")
                 
                 # OpenRouter is OpenAI compatible
                 or_client = AsyncOpenAI(
                     base_url="https://openrouter.ai/api/v1",
-                    api_key=self.api_keys["OPENROUTER_API_KEY"]
+                    api_key=api_key
                 )
                 formatted_msgs = [{"role": m["role"], "content": str(m.get("content", ""))} for m in messages]
                 response = await or_client.chat.completions.create(
@@ -142,11 +163,12 @@ class LLMReflex(BasePlugin):
                     
             elif model.startswith("openai/"):
                 actual_model = model.replace("openai/", "")
-                if not self.api_keys.get("OPENAI_API_KEY"):
+                api_key = self._resolve_api_key("openai", event.get("api_key_name"))
+                if not api_key:
                     raise Exception("OpenAI API key not configured")
                 
                 openai_client = AsyncOpenAI(
-                    api_key=self.api_keys["OPENAI_API_KEY"]
+                    api_key=api_key
                 )
                 formatted_msgs = [{"role": m["role"], "content": str(m.get("content", ""))} for m in messages]
                 response = await openai_client.chat.completions.create(
@@ -160,13 +182,43 @@ class LLMReflex(BasePlugin):
                     completion_tokens = response.usage.completion_tokens
                     total_tokens = response.usage.total_tokens
 
+            elif model.startswith("atria/"):
+                actual_model = model.replace("atria/", "")
+                api_key = self._resolve_api_key("atria", event.get("api_key_name"))
+                if not api_key:
+                    raise Exception("Atria API key not configured")
+                
+                # Atria is OpenAI compatible
+                atria_client = AsyncOpenAI(
+                    base_url="https://api.atria-asi.ai/v1",
+                    api_key=api_key
+                )
+                formatted_msgs = [{"role": m["role"], "content": str(m.get("content", ""))} for m in messages]
+                response = await atria_client.chat.completions.create(
+                    model=actual_model,
+                    messages=formatted_msgs,
+                    temperature=temperature,
+                )
+                reply_text = response.choices[0].message.content
+                if response.usage:
+                    prompt_tokens = response.usage.prompt_tokens
+                    completion_tokens = response.usage.completion_tokens
+                    total_tokens = response.usage.total_tokens
+
             else:
                 # Default / Local model
                 formatted_msgs = [{"role": m["role"], "content": str(m.get("content", ""))} for m in messages]
+                
+                extra_body = {}
+                num_ctx = event.get("num_ctx") or self.config.get("num_ctx")
+                if num_ctx:
+                    extra_body["options"] = {"num_ctx": int(num_ctx)}
+                
                 response = await self.local_client.chat.completions.create(
                     model=model,
                     messages=formatted_msgs,
                     temperature=temperature,
+                    extra_body=extra_body if extra_body else None
                 )
                 reply_text = response.choices[0].message.content
                 if response.usage:

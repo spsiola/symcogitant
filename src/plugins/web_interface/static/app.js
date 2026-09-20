@@ -6,6 +6,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // state mapping: source -> { btn, content, logContainer, metricsContainer, unreadCount }
     const tabs = {};
     let activeTabId = null;
+    let globalLlmKeys = {};
 
     ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
@@ -14,11 +15,18 @@ document.addEventListener('DOMContentLoaded', () => {
         ensureTabExists(source);
         
         if (data.type === 'metric') {
+            ensureTabExists(source);
             updateMetrics(source, data);
+            if (data.data && data.data.llm_keys) {
+                globalLlmKeys = data.data.llm_keys;
+            }
             if (data.data && data.data.llm_models) {
                 updateModelsDropdown(data.data.llm_models);
             }
         } else if (data.type === 'init_data') {
+            if (data.data && data.data.llm_keys) {
+                globalLlmKeys = data.data.llm_keys;
+            }
             if (data.data && data.data.llm_models) {
                 ensureTabExists('LLMChatPlugin');
                 updateModelsDropdown(data.data.llm_models);
@@ -101,18 +109,42 @@ document.addEventListener('DOMContentLoaded', () => {
             
             const chatModelSelect = document.createElement('select');
             chatModelSelect.className = 'chat-model-select';
+            tabs[id].chatModelSelect = chatModelSelect;
+            
+            const chatKeySelect = document.createElement('select');
+            chatKeySelect.className = 'chat-key-select';
+            const defaultKeyOpt = document.createElement('option');
+            defaultKeyOpt.value = 'default';
+            defaultKeyOpt.textContent = 'Default Key';
+            chatKeySelect.appendChild(defaultKeyOpt);
+            chatKeySelect.disabled = true;
+            tabs[id].chatKeySelect = chatKeySelect;
+            
+            chatModelSelect.addEventListener('change', () => {
+                updateKeyDropdown();
+            });
+
+            const contextSizeBadge = document.createElement('div');
             const defaultOpt = document.createElement('option');
             defaultOpt.value = 'default';
             defaultOpt.textContent = 'Default Model';
             chatModelSelect.appendChild(defaultOpt);
             tabs[id].chatModelSelect = chatModelSelect;
             
-            const contextSizeBadge = document.createElement('div');
             contextSizeBadge.className = 'context-size-badge';
             contextSizeBadge.textContent = 'Контекст: 0 симв';
             tabs[id].contextSizeBadge = contextSizeBadge;
             
+            const chatCtxInput = document.createElement('input');
+            chatCtxInput.type = 'number';
+            chatCtxInput.className = 'chat-ctx-input';
+            chatCtxInput.placeholder = 'Context Size (e.g. 8192)';
+            chatCtxInput.title = 'Ограничение контекста (num_ctx). Оставьте пустым для авто.';
+            tabs[id].chatCtxInput = chatCtxInput;
+            
             chatHeaderLeft.appendChild(chatModelSelect);
+            chatHeaderLeft.appendChild(chatKeySelect);
+            chatHeaderLeft.appendChild(chatCtxInput);
             chatHeaderLeft.appendChild(contextSizeBadge);
             
             const chatHeaderButtons = document.createElement('div');
@@ -201,21 +233,27 @@ document.addEventListener('DOMContentLoaded', () => {
             
             const sendMessage = () => {
                 const text = chatInput.value.trim();
-                const model = chatModelSelect.value;
                 if (text) {
-                    // Do not eagerly append to array or UI, wait for the echo from server via ui_chat_output
-                    // actually wait, ui_chat_output only sends after response. No, user message is NOT echoed. Wait.
-                    // Oh, appendChatMessage was called here explicitly. We must add it to messages_array locally or let the server send it back.
-                    // Let's add it to messages_array locally here since it isn't echoed.
                     tabs[id].messages_array.push({role: 'user', content: text});
-                    appendChatMessage(id, {role: 'user', content: text});
+                    
+                    const selectedModel = tabs[id].chatModelSelect ? tabs[id].chatModelSelect.value : null;
+                    const ctxVal = tabs[id].chatCtxInput ? tabs[id].chatCtxInput.value : null;
+                    const keyName = tabs[id].chatKeySelect && !tabs[id].chatKeySelect.disabled ? tabs[id].chatKeySelect.value : null;
                     
                     ws.send(JSON.stringify({
                         type: 'ui_chat_input',
                         target: id,
                         message: text,
-                        model: model !== 'default' ? model : undefined
+                        model: selectedModel !== 'default' ? selectedModel : undefined,
+                        num_ctx: ctxVal ? parseInt(ctxVal, 10) : undefined,
+                        api_key_name: keyName
                     }));
+                    
+                    appendChatMessage(id, {
+                        role: 'user',
+                        content: text
+                    });
+                    
                     chatInput.value = '';
                     chatCounter.textContent = '0 символов | ~0 токенов';
                 }
@@ -343,9 +381,14 @@ document.addEventListener('DOMContentLoaded', () => {
         if (data.llms) {
             let llmsHtml = '';
             for (const [name, status] of Object.entries(data.llms)) {
+                let displayName = name;
+                if (globalLlmKeys && globalLlmKeys[name] && globalLlmKeys[name].length > 1) {
+                    displayName = `[${globalLlmKeys[name].length}] ${name}`;
+                }
+                
                 llmsHtml += `
                     <div class="llm-status">
-                        <span>${name}</span>
+                        <span>${displayName}</span>
                         <span class="status-lamp ${status}"></span>
                     </div>
                 `;
@@ -382,16 +425,33 @@ document.addEventListener('DOMContentLoaded', () => {
             const cloudGroup = document.createElement('optgroup');
             cloudGroup.label = 'Cloud Models';
             
-            llm_models.forEach(model => {
-                const opt = document.createElement('option');
-                opt.value = model;
-                opt.textContent = model;
-                if (model.includes('/')) {
-                    cloudGroup.appendChild(opt);
-                } else {
+            if (llm_models.local && Array.isArray(llm_models.local)) {
+                llm_models.local.forEach(model => {
+                    const opt = document.createElement('option');
+                    opt.value = model;
+                    let displayName = model;
+                    const provider = model.includes('/') ? model.split('/')[0].toLowerCase() : null;
+                    if (provider && globalLlmKeys && globalLlmKeys[provider] && globalLlmKeys[provider].length > 1) {
+                        displayName = `[${globalLlmKeys[provider].length}] ${model}`;
+                    }
+                    opt.textContent = displayName;
                     localGroup.appendChild(opt);
-                }
-            });
+                });
+            }
+
+            if (llm_models.cloud && Array.isArray(llm_models.cloud)) {
+                llm_models.cloud.forEach(model => {
+                    const opt = document.createElement('option');
+                    opt.value = model;
+                    let displayName = model;
+                    const provider = model.includes('/') ? model.split('/')[0].toLowerCase() : null;
+                    if (provider && globalLlmKeys && globalLlmKeys[provider] && globalLlmKeys[provider].length > 1) {
+                        displayName = `[${globalLlmKeys[provider].length}] ${model}`;
+                    }
+                    opt.textContent = displayName;
+                    cloudGroup.appendChild(opt);
+                });
+            }
             
             if (localGroup.children.length > 0) select.appendChild(localGroup);
             if (cloudGroup.children.length > 0) select.appendChild(cloudGroup);
@@ -407,6 +467,35 @@ document.addEventListener('DOMContentLoaded', () => {
             if (Array.from(select.options).some(o => o.value === currentVal)) {
                 select.value = currentVal;
             }
+            updateKeyDropdown();
+        }
+    }
+
+    function updateKeyDropdown() {
+        if (!tabs['LLMChatPlugin'] || !tabs['LLMChatPlugin'].chatModelSelect || !tabs['LLMChatPlugin'].chatKeySelect) return;
+        const modelSelect = tabs['LLMChatPlugin'].chatModelSelect;
+        const keySelect = tabs['LLMChatPlugin'].chatKeySelect;
+        
+        const selectedModel = modelSelect.value;
+        const provider = selectedModel.includes('/') ? selectedModel.split('/')[0].toLowerCase() : null;
+        
+        const keysForProvider = provider && globalLlmKeys[provider] ? globalLlmKeys[provider] : [];
+        
+        keySelect.innerHTML = '';
+        if (keysForProvider.length > 1) {
+            keysForProvider.forEach(keyName => {
+                const opt = document.createElement('option');
+                opt.value = keyName;
+                opt.textContent = keyName === 'default' ? 'Default Key' : keyName;
+                keySelect.appendChild(opt);
+            });
+            keySelect.disabled = false;
+        } else {
+            const opt = document.createElement('option');
+            opt.value = keysForProvider.length === 1 ? keysForProvider[0] : 'default';
+            opt.textContent = keysForProvider.length === 1 && keysForProvider[0] !== 'default' ? keysForProvider[0] : 'Default Key';
+            keySelect.appendChild(opt);
+            keySelect.disabled = true;
         }
     }
 
