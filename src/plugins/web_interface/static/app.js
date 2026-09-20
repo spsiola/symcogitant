@@ -290,7 +290,7 @@ document.addEventListener('DOMContentLoaded', () => {
         updateBadge(id);
         
         // scroll to bottom
-        tabs[id].content.scrollTop = tabs[id].content.scrollHeight;
+        tabs[id].logContainer.scrollTop = tabs[id].logContainer.scrollHeight;
     }
 
     function updateBadge(id) {
@@ -321,7 +321,7 @@ document.addEventListener('DOMContentLoaded', () => {
         logContainer.appendChild(entry);
         
         if (activeTabId === id) {
-            tabs[id].content.scrollTop = tabs[id].content.scrollHeight;
+            tabs[id].logContainer.scrollTop = tabs[id].logContainer.scrollHeight;
         }
     }
 
@@ -342,8 +342,23 @@ document.addEventListener('DOMContentLoaded', () => {
         logContainer.appendChild(entry);
         
         if (activeTabId === id) {
-            tabs[id].content.scrollTop = tabs[id].content.scrollHeight;
+            tabs[id].logContainer.scrollTop = tabs[id].logContainer.scrollHeight;
         }
+    }
+
+    function timeAgo(dateParam) {
+        if (!dateParam) return "";
+        const date = typeof dateParam === 'object' ? dateParam : new Date(dateParam);
+        const today = new Date();
+        const seconds = Math.round((today - date) / 1000);
+        const minutes = Math.round(seconds / 60);
+
+        if (seconds < 5) return 'just now';
+        else if (seconds < 60) return `${seconds} sec ago`;
+        else if (seconds < 90) return '1 min ago';
+        else if (minutes < 60) return `${minutes} min ago`;
+        else if (minutes < 1440) return `${Math.floor(minutes / 60)} h ago`;
+        else return `${Math.floor(minutes / 1440)} days ago`;
     }
 
     function updateMetrics(id, payload) {
@@ -351,7 +366,8 @@ document.addEventListener('DOMContentLoaded', () => {
         metricsContainer.style.display = 'flex'; // reveal metrics
         
         const data = payload.data;
-        const timeStr = new Date(payload.timestamp * 1000).toLocaleTimeString();
+        const dateObj = new Date(payload.timestamp * 1000);
+        const timeStr = `<span title="${dateObj.toLocaleString()}">${timeAgo(dateObj)}</span>`;
 
         let html = '';
         
@@ -405,12 +421,26 @@ document.addEventListener('DOMContentLoaded', () => {
             `;
         }
 
+        
+        if (data.llm_registry) {
+            window.__llm_registry = data.llm_registry; // Store globally for modal
+            
+            html += `
+                <div class="metric-card" style="flex: 1; min-width: 250px;">
+                    <div class="metric-header">LLM Registry</div>
+                    <div class="metric-body" style="font-size: 0.9rem;">
+                        <button onclick="showRegistryModal()" style="margin-top: 10px; padding: 5px 10px; cursor: pointer; background: var(--bg-hover); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 4px;">Show Registry (JSON)</button>
+                    </div>
+                </div>
+            `;
+        }
+
         metricsContainer.innerHTML = html;
         
         // Also log to history
         appendLog(id, {
             level: 'INFO',
-            message: `[Metrics Updated] CPU: ${data.cpu ? data.cpu.usage_percent : '?'}%, RAM: ${data.ram ? data.ram.usage_percent : '?'}%`
+            message: `[Fast Loop] Metrics Updated: CPU: ${data.cpu ? data.cpu.usage_percent : '?'}%, RAM: ${data.ram ? data.ram.usage_percent : '?'}%`
         });
     }
 
@@ -669,3 +699,44 @@ document.addEventListener('DOMContentLoaded', () => {
         document.body.appendChild(modal);
     }
 });
+
+
+window.showRegistryModal = function() {
+    let modal = document.getElementById('registry-modal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'registry-modal';
+        modal.style.cssText = 'position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1000; display: flex; justify-content: center; align-items: center;';
+        
+        const content = document.createElement('div');
+        content.style.cssText = 'background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: 8px; width: 80%; height: 80%; display: flex; flex-direction: column; box-shadow: 0 4px 20px rgba(0,0,0,0.5); overflow: hidden;';
+        
+        const header = document.createElement('div');
+        header.style.cssText = 'padding: 15px; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.05);';
+        header.innerHTML = '<h3 style="margin:0;">LLM Registry JSON</h3><button onclick="document.getElementById(\'registry-modal\').style.display=\'none\'" style="cursor:pointer; background:none; border:none; color:var(--text-primary); font-size:1.2rem;">&times;</button>';
+        
+        const body = document.createElement('div');
+        body.style.cssText = 'padding: 15px; overflow-y: auto; flex: 1;';
+        
+        const pre = document.createElement('pre');
+        pre.id = 'registry-json-content';
+        pre.style.cssText = 'margin: 0; font-family: monospace; font-size: 0.9rem; color: #a5d6ff; white-space: pre-wrap; word-wrap: break-word;';
+        
+        body.appendChild(pre);
+        content.appendChild(header);
+        content.appendChild(body);
+        modal.appendChild(content);
+        document.body.appendChild(modal);
+        
+        // Close on backdrop click
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) modal.style.display = 'none';
+        });
+    }
+    
+    // Parse times in JSON to show relative age
+    let reg = window.__llm_registry || {};
+    
+    document.getElementById('registry-json-content').textContent = JSON.stringify(reg, null, 2);
+    modal.style.display = 'flex';
+};

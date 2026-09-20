@@ -1,18 +1,22 @@
 import asyncio
-import time
 import os
-from typing import Any, Dict
-from openai import AsyncOpenAI
+import time
+from datetime import UTC
+from typing import Any
+
 from anthropic import AsyncAnthropic
-from google import genai
 from dotenv import dotenv_values
+from google import genai
+from openai import AsyncOpenAI
+
 from src.core.plugin import BasePlugin
+
 
 class LLMReflex(BasePlugin):
     """
     Рефлекс общения с LLM. Поддерживает OpenAI, Anthropic, Google Gemini, OpenRouter и локальные модели.
     """
-    def __init__(self, config: Dict[str, Any], event_bus: Any, core: Any = None):
+    def __init__(self, config: dict[str, Any], event_bus: Any, core: Any = None):
         super().__init__(config, event_bus, core=core)
         
         # Получаем параметры подключения
@@ -47,7 +51,7 @@ class LLMReflex(BasePlugin):
         while self.running:
             await asyncio.sleep(1)
 
-    def _resolve_api_key(self, provider_prefix: str, api_key_name: str = None) -> str:
+    def _resolve_api_key(self, provider_prefix: str, api_key_name: str | None = None) -> str:
         """Resolves the API key from .env based on provider and optional name."""
         prefix = f"{provider_prefix.upper()}_API_KEY"
         if api_key_name and api_key_name != "default":
@@ -90,7 +94,7 @@ class LLMReflex(BasePlugin):
             if model.startswith("anthropic/"):
                 actual_model = model.replace("anthropic/", "")
                 if not self.anthropic_client:
-                    raise Exception("Anthropic API key not configured")
+                    raise ValueError("Anthropic API key not configured")
                     
                 # Anthropic requires system prompt as a separate parameter
                 system_prompt = next((m["content"] for m in messages if m["role"] == "system"), "")
@@ -142,7 +146,7 @@ class LLMReflex(BasePlugin):
                 actual_model = model.replace("openrouter/", "")
                 api_key = self._resolve_api_key("openrouter", event.get("api_key_name"))
                 if not api_key:
-                    raise Exception("OpenRouter API key not configured")
+                    raise ValueError("OpenRouter API key not configured")
                 
                 # OpenRouter is OpenAI compatible
                 or_client = AsyncOpenAI(
@@ -155,17 +159,12 @@ class LLMReflex(BasePlugin):
                     messages=formatted_msgs,
                     temperature=temperature,
                 )
-                reply_text = response.choices[0].message.content
-                if response.usage:
-                    prompt_tokens = response.usage.prompt_tokens
-                    completion_tokens = response.usage.completion_tokens
-                    total_tokens = response.usage.total_tokens
-                    
+
             elif model.startswith("openai/"):
                 actual_model = model.replace("openai/", "")
                 api_key = self._resolve_api_key("openai", event.get("api_key_name"))
                 if not api_key:
-                    raise Exception("OpenAI API key not configured")
+                    raise ValueError("OpenAI API key not configured")
                 
                 openai_client = AsyncOpenAI(
                     api_key=api_key
@@ -176,17 +175,12 @@ class LLMReflex(BasePlugin):
                     messages=formatted_msgs,
                     temperature=temperature,
                 )
-                reply_text = response.choices[0].message.content
-                if response.usage:
-                    prompt_tokens = response.usage.prompt_tokens
-                    completion_tokens = response.usage.completion_tokens
-                    total_tokens = response.usage.total_tokens
 
             elif model.startswith("atria/"):
                 actual_model = model.replace("atria/", "")
                 api_key = self._resolve_api_key("atria", event.get("api_key_name"))
                 if not api_key:
-                    raise Exception("Atria API key not configured")
+                    raise ValueError("Atria API key not configured")
                 
                 # Atria is OpenAI compatible
                 atria_client = AsyncOpenAI(
@@ -199,11 +193,6 @@ class LLMReflex(BasePlugin):
                     messages=formatted_msgs,
                     temperature=temperature,
                 )
-                reply_text = response.choices[0].message.content
-                if response.usage:
-                    prompt_tokens = response.usage.prompt_tokens
-                    completion_tokens = response.usage.completion_tokens
-                    total_tokens = response.usage.total_tokens
 
             else:
                 # Default / Local model
@@ -220,27 +209,89 @@ class LLMReflex(BasePlugin):
                     temperature=temperature,
                     extra_body=extra_body if extra_body else None
                 )
-                reply_text = response.choices[0].message.content
-                if response.usage:
-                    prompt_tokens = response.usage.prompt_tokens
-                    completion_tokens = response.usage.completion_tokens
-                    total_tokens = response.usage.total_tokens
+
+            reply_text = response.choices[0].message.content if hasattr(response, "choices") and response.choices else ""
             
+            prompt_tokens = 0
+            completion_tokens = 0
+            total_tokens = 0
+            cache_read_tokens = 0
+            cache_write_tokens = 0
+            
+            if hasattr(response, "usage") and response.usage:
+                prompt_tokens = getattr(response.usage, "prompt_tokens", 0) or 0
+                completion_tokens = getattr(response.usage, "completion_tokens", 0) or 0
+                total_tokens = getattr(response.usage, "total_tokens", 0) or 0
+                
+                if hasattr(response.usage, "prompt_tokens_details") and response.usage.prompt_tokens_details:
+                    cache_read_tokens = getattr(response.usage.prompt_tokens_details, "cached_tokens", 0) or 0
+                
+                if hasattr(response.usage, "model_extra") and response.usage.model_extra:
+                    cache_read_tokens = response.usage.model_extra.get("cache_read_tokens", cache_read_tokens)
+                    cache_write_tokens = response.usage.model_extra.get("cache_write_tokens", cache_write_tokens)
+
+            import json
+            import os
+            from datetime import datetime
+            
+            # --- Registry Cost Calculation & Logging ---
+            registry_path = os.path.join(os.getcwd(), "data", "llm_registry.json")
+            cost_usd = 0.0
+            pricing = {}
+            provider_prefix = model.split("/")[0] if "/" in model else "local"
+            
+            if os.path.exists(registry_path):
+                try:
+                    with open(registry_path, "r", encoding="utf-8") as rf:
+                        reg = json.load(rf)
+                    model_data = reg.get("models", {}).get(model, {})
+                    pricing = model_data.get("pricing", {})
+                    p_cost = pricing.get("prompt", 0) * max(0, prompt_tokens - cache_read_tokens)
+                    c_cost = pricing.get("completion", 0) * completion_tokens
+                    cr_cost = pricing.get("cache_read", 0) * cache_read_tokens
+                    cw_cost = pricing.get("cache_write", 0) * cache_write_tokens
+                    cost_usd = p_cost + c_cost + cr_cost + cw_cost
+                except Exception:
+                    pass
+            
+            log_record = {
+                "timestamp": datetime.now(UTC).isoformat(),
+                "provider": provider_prefix,
+                "key_name": event.get("api_key_name", "default"),
+                "requested_model": model,
+                "usage": {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": total_tokens,
+                    "cache_read_tokens": cache_read_tokens,
+                    "cache_write_tokens": cache_write_tokens
+                },
+                "snapshot_pricing": pricing,
+                "calculated_cost_usd": cost_usd
+            }
+            
+            try:
+                logs_dir = os.path.join(os.getcwd(), "data", "logs")
+                os.makedirs(logs_dir, exist_ok=True)
+                with open(os.path.join(logs_dir, "llm_usage.jsonl"), "a", encoding="utf-8") as wf:
+                    wf.write(json.dumps(log_record, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
+
             latency = time.time() - start_time
             
             await self.emit_log(
                 f"Request {request_id} completed in {latency:.2f}s. "
-                f"Tokens: {prompt_tokens} prompt, {completion_tokens} completion, {total_tokens} total."
+                f"Tokens: {prompt_tokens} prompt, {completion_tokens} completion, {total_tokens} total. "
+                f"Cost: ${cost_usd:.6f}"
             )
-            
-            from datetime import datetime
             
             await self.event_bus.publish({
                 "type": "llm_response",
                 "request_id": request_id,
                 "reply": reply_text,
                 "model": model,
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
                 "usage": {
                     "prompt_tokens": prompt_tokens,
                     "completion_tokens": completion_tokens,
@@ -249,9 +300,9 @@ class LLMReflex(BasePlugin):
                 "latency_sec": latency
             })
             
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             latency = time.time() - start_time
-            error_msg = f"Request {request_id} failed after {latency:.2f}s: {str(e)}"
+            error_msg = f"Request {request_id} failed after {latency:.2f}s: {e!s}"
             await self.emit_log(error_msg, level="ERROR")
             
             await self.event_bus.publish({
