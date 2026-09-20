@@ -7,9 +7,10 @@ class BasePlugin(ABC):
     """
     Базовый класс для всех плагинов Symcogitant.
     """
-    def __init__(self, config: Dict[str, Any], event_bus: Any):
+    def __init__(self, config: Dict[str, Any], event_bus: Any, core: Any = None):
         self.config = config
         self.event_bus = event_bus
+        self.core = core
         self.running = False
         self.task: asyncio.Task | None = None
         self.start_time: float | None = None

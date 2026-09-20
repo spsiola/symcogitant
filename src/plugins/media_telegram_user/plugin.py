@@ -11,8 +11,8 @@ class MediaTelegramUserPlugin(BasePlugin):
     Плагин для получения обновлений из Telegram от имени пользователя.
     Слушает входящие сообщения, редактирование и реакции, и транслирует их в EventBus.
     """
-    def __init__(self, config, event_bus):
-        super().__init__(config, event_bus)
+    def __init__(self, config, event_bus, core=None):
+        super().__init__(config, event_bus, core=core)
         
         env_path = os.path.join("data", ".env")
         if os.path.exists(env_path):

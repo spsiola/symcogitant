@@ -1,0 +1,209 @@
+import asyncio
+import time
+import os
+from typing import Any, Dict
+from openai import AsyncOpenAI
+from anthropic import AsyncAnthropic
+from google import genai
+from dotenv import dotenv_values
+from src.core.plugin import BasePlugin
+
+class LLMReflex(BasePlugin):
+    """
+    Рефлекс общения с LLM. Поддерживает OpenAI, Anthropic, Google Gemini, OpenRouter и локальные модели.
+    """
+    def __init__(self, config: Dict[str, Any], event_bus: Any, core: Any = None):
+        super().__init__(config, event_bus, core=core)
+        
+        # Получаем параметры подключения
+        self.default_base_url = self.config.get("base_url", "http://127.0.0.1:11434/v1")
+        self.default_api_key = self.config.get("api_key", "ollama")
+        self.default_model = self.config.get("default_model", "qwen2.5-coder:7b")
+        
+        env_path = os.path.join(os.getcwd(), "data", ".env")
+        self.api_keys = dotenv_values(env_path) if os.path.exists(env_path) else {}
+        
+        # Default local client
+        self.local_client = AsyncOpenAI(
+            base_url=self.default_base_url,
+            api_key=self.default_api_key
+        )
+        
+        # Cloud clients initialized lazily or proactively
+        self.anthropic_client = None
+        self.gemini_client = None
+        if self.api_keys.get("ANTHROPIC_API_KEY"):
+            self.anthropic_client = AsyncAnthropic(api_key=self.api_keys["ANTHROPIC_API_KEY"])
+            
+        google_api_key = self.api_keys.get("GOOGLE_API_KEY") or self.api_keys.get("GEMINI_API_KEY")
+        if google_api_key:
+            self.gemini_client = genai.Client(api_key=google_api_key)
+
+    async def run(self):
+        self.event_bus.subscribe(self._handle_event)
+        await self.emit_log(f"LLM Reflex started. Default Base URL: {self.default_base_url}")
+        
+        while self.running:
+            await asyncio.sleep(1)
+
+    async def _handle_event(self, event: dict):
+        if event.get("type") == "llm_request":
+            asyncio.create_task(self.process_llm_request(event))
+
+    async def process_llm_request(self, event: dict):
+        request_id = event.get("request_id", f"req_{int(time.time()*1000)}")
+        messages = event.get("messages", [])
+        model = event.get("model", self.default_model)
+        temperature = event.get("temperature", 0.7)
+        
+        if not messages:
+            await self.emit_log("Received llm_request without messages.", level="WARNING")
+            return
+            
+        await self.emit_log(f"Sending request {request_id} to model '{model}' with {len(messages)} messages.")
+        
+        start_time = time.time()
+        try:
+            reply_text = ""
+            prompt_tokens, completion_tokens, total_tokens = 0, 0, 0
+            
+            if model.startswith("anthropic/"):
+                actual_model = model.replace("anthropic/", "")
+                if not self.anthropic_client:
+                    raise Exception("Anthropic API key not configured")
+                    
+                # Anthropic requires system prompt as a separate parameter
+                system_prompt = next((m["content"] for m in messages if m["role"] == "system"), "")
+                user_msgs = [{"role": m["role"], "content": str(m.get("content", ""))} for m in messages if m["role"] != "system"]
+                
+                response = await self.anthropic_client.messages.create(
+                    model=actual_model,
+                    system=system_prompt,
+                    messages=user_msgs,
+                    max_tokens=4096,
+                    temperature=temperature
+                )
+                reply_text = response.content[0].text
+                prompt_tokens = response.usage.input_tokens
+                completion_tokens = response.usage.output_tokens
+                total_tokens = prompt_tokens + completion_tokens
+
+            elif model.startswith("google/"):
+                actual_model = model.replace("google/", "")
+                system_instruction = next((m["content"] for m in messages if m["role"] == "system"), None)
+                
+                formatted_msgs = []
+                for m in messages:
+                    if m["role"] == "system":
+                        continue
+                    role = "user" if m["role"] == "user" else "model"
+                    # google-genai uses 'model' instead of 'assistant' usually, but 'user' and 'model' is typical.
+                    formatted_msgs.append({"role": role, "parts": [{"text": m["content"]}]})
+                
+                if not getattr(self, "gemini_client", None):
+                    raise ValueError("Google API Key is not configured")
+                    
+                config_kwargs = {"temperature": temperature}
+                if system_instruction:
+                    config_kwargs["system_instruction"] = system_instruction
+                
+                response = await self.gemini_client.aio.models.generate_content(
+                    model=actual_model,
+                    contents=formatted_msgs,
+                    config=genai.types.GenerateContentConfig(**config_kwargs)
+                )
+                reply_text = response.text
+                if hasattr(response, "usage_metadata") and response.usage_metadata:
+                    prompt_tokens = response.usage_metadata.prompt_token_count
+                    completion_tokens = response.usage_metadata.candidates_token_count
+                    total_tokens = response.usage_metadata.total_token_count
+
+            elif model.startswith("openrouter/"):
+                actual_model = model.replace("openrouter/", "")
+                if not self.api_keys.get("OPENROUTER_API_KEY"):
+                    raise Exception("OpenRouter API key not configured")
+                
+                # OpenRouter is OpenAI compatible
+                or_client = AsyncOpenAI(
+                    base_url="https://openrouter.ai/api/v1",
+                    api_key=self.api_keys["OPENROUTER_API_KEY"]
+                )
+                formatted_msgs = [{"role": m["role"], "content": str(m.get("content", ""))} for m in messages]
+                response = await or_client.chat.completions.create(
+                    model=actual_model,
+                    messages=formatted_msgs,
+                    temperature=temperature,
+                )
+                reply_text = response.choices[0].message.content
+                if response.usage:
+                    prompt_tokens = response.usage.prompt_tokens
+                    completion_tokens = response.usage.completion_tokens
+                    total_tokens = response.usage.total_tokens
+                    
+            elif model.startswith("openai/"):
+                actual_model = model.replace("openai/", "")
+                if not self.api_keys.get("OPENAI_API_KEY"):
+                    raise Exception("OpenAI API key not configured")
+                
+                openai_client = AsyncOpenAI(
+                    api_key=self.api_keys["OPENAI_API_KEY"]
+                )
+                formatted_msgs = [{"role": m["role"], "content": str(m.get("content", ""))} for m in messages]
+                response = await openai_client.chat.completions.create(
+                    model=actual_model,
+                    messages=formatted_msgs,
+                    temperature=temperature,
+                )
+                reply_text = response.choices[0].message.content
+                if response.usage:
+                    prompt_tokens = response.usage.prompt_tokens
+                    completion_tokens = response.usage.completion_tokens
+                    total_tokens = response.usage.total_tokens
+
+            else:
+                # Default / Local model
+                formatted_msgs = [{"role": m["role"], "content": str(m.get("content", ""))} for m in messages]
+                response = await self.local_client.chat.completions.create(
+                    model=model,
+                    messages=formatted_msgs,
+                    temperature=temperature,
+                )
+                reply_text = response.choices[0].message.content
+                if response.usage:
+                    prompt_tokens = response.usage.prompt_tokens
+                    completion_tokens = response.usage.completion_tokens
+                    total_tokens = response.usage.total_tokens
+            
+            latency = time.time() - start_time
+            
+            await self.emit_log(
+                f"Request {request_id} completed in {latency:.2f}s. "
+                f"Tokens: {prompt_tokens} prompt, {completion_tokens} completion, {total_tokens} total."
+            )
+            
+            from datetime import datetime
+            
+            await self.event_bus.publish({
+                "type": "llm_response",
+                "request_id": request_id,
+                "reply": reply_text,
+                "model": model,
+                "timestamp": datetime.now().isoformat(),
+                "usage": {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": total_tokens
+                },
+                "latency_sec": latency
+            })
+            
+        except Exception as e:
+            latency = time.time() - start_time
+            error_msg = f"Request {request_id} failed after {latency:.2f}s: {str(e)}"
+            await self.emit_log(error_msg, level="ERROR")
+            
+            await self.event_bus.publish({
+                "type": "llm_response_error",
+                "request_id": request_id,
+                "error": str(e)
+            })

@@ -21,8 +21,30 @@ plugins:
     config:
       interval: 60
       llm_endpoints:
-        ollama: "http://127.0.0.1:11434/"
+        ollama: "http://127.0.0.1:11434/v1/models"
         lm_studio: "http://localhost:1234/v1/models"
-        llama_cpp: "http://localhost:8080/v1/models"
-        vllm: "http://localhost:8000/v1/models"
-        jan: "http://localhost:1337/v1/models"
+#        llama_cpp: "http://localhost:8080/v1/models"
+#        vllm: "http://localhost:8000/v1/models"
+#        jan: "http://localhost:1337/v1/models"
+      openrouter_popular_models:
+        - "openrouter/openai/gpt-5.6-luna"
+        - "openrouter/anthropic/claude-opus-5"
+        - "openrouter/google/gemini-3.8-flash"
+        - "openrouter/z-ai/glm-5.3"
+        - "openrouter/z-ai/glm-5.3-flash"
+        - "openrouter/deepseek/deepseek-v4.1-flash"
+        - "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
+        
+
+  - module: "src.reflexes.llm_reflex.reflex"
+    class: "LLMReflex"
+    enabled: true
+    config:
+      base_url: "http://127.0.0.1:11434/v1"
+      api_key: "ollama"
+      default_model: "qwen2.5-coder:7b"
+
+  - module: "src.plugins.llm_chat.plugin"
+    class: "LLMChatPlugin"
+    enabled: true
+    config: {}

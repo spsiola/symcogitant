@@ -22,14 +22,24 @@ class SymcogitantCore:
         with open(self.config_path, 'r', encoding='utf-8') as f:
             return yaml.safe_load(f)
 
-    def _load_plugin(self, plugin_config: dict) -> BasePlugin:
-        module_name = plugin_config['module']
-        class_name = plugin_config['class']
-        
-        module = importlib.import_module(module_name)
-        plugin_class = getattr(module, class_name)
-        
-        return plugin_class(plugin_config.get('config', {}), self.event_bus)
+    def get_plugin(self, name: str) -> BasePlugin | None:
+        for p in self.plugins:
+            if p.__class__.__name__ == name:
+                return p
+        return None
+
+    def _load_plugin(self, plugin_config: dict) -> BasePlugin | None:
+        try:
+            module_name = plugin_config['module']
+            class_name = plugin_config['class']
+            
+            module = importlib.import_module(module_name)
+            plugin_class = getattr(module, class_name)
+            
+            return plugin_class(plugin_config.get('config', {}), self.event_bus, core=self)
+        except Exception as e:
+            logger.error(f"Failed to load plugin {plugin_config.get('class', 'Unknown')}: {e}")
+            return None
 
     async def _log_subscriber(self, event: dict):
         if event.get("type") == "log":
@@ -51,8 +61,12 @@ class SymcogitantCore:
             if p_cfg.get('enabled', True):
                 logger.info(f"Loading plugin: {p_cfg['class']}")
                 plugin = self._load_plugin(p_cfg)
-                self.plugins.append(plugin)
-                await plugin.start()
+                if plugin:
+                    self.plugins.append(plugin)
+                    try:
+                        await plugin.start()
+                    except Exception as e:
+                        logger.error(f"Failed to start plugin {p_cfg['class']}: {e}")
 
         logger.info("Symcogitant started. Press Ctrl+C to stop.")
         

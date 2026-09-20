@@ -10,8 +10,8 @@ from src.core.plugin import BasePlugin
 
 
 class WebInterfacePlugin(BasePlugin):
-    def __init__(self, config, event_bus):
-        super().__init__(config, event_bus)
+    def __init__(self, config, event_bus, core=None):
+        super().__init__(config, event_bus, core=core)
         self.app = FastAPI(title="Symcogitant Web Interface")
         self.host = self.config.get("host", "127.0.0.1")
         self.port = self.config.get("port", 4217)
@@ -29,9 +29,37 @@ class WebInterfacePlugin(BasePlugin):
         async def websocket_logs(websocket: WebSocket):
             await websocket.accept()
             self.connected_websockets.append(websocket)
+            asyncio.create_task(self.event_bus.publish({
+                "type": "ui_client_connected",
+                "source": self.__class__.__name__
+            }))
+            
+            # Direct query to SystemMonitorReflex for instant model list
+            if self.core:
+                sys_monitor = self.core.get_plugin("SystemMonitorReflex")
+                if sys_monitor:
+                    try:
+                        models = sys_monitor.get_models()
+                        if models:
+                            await websocket.send_json({
+                                "type": "init_data",
+                                "data": {
+                                    "llm_models": models
+                                }
+                            })
+                    except Exception as e:
+                        await self.emit_log(f"Failed to fetch models from SystemMonitorReflex: {e}", level="ERROR")
             try:
                 while True:
-                    await websocket.receive_text()
+                    text_data = await websocket.receive_text()
+                    try:
+                        import json
+                        data = json.loads(text_data)
+                        if isinstance(data, dict) and "type" in data:
+                            # Forward UI events to internal event bus
+                            asyncio.create_task(self.event_bus.publish(data))
+                    except Exception as e:
+                        await self.emit_log(f"Error parsing WS message: {e}", level="ERROR")
             except (WebSocketDisconnect, asyncio.CancelledError):
                 pass
             finally:
@@ -57,7 +85,9 @@ class WebInterfacePlugin(BasePlugin):
             loop="asyncio"
         )
         self.server = uvicorn.Server(uvicorn_config)
-        await self.emit_log(f"Starting web interface on http://{self.host}:{self.port}")
+        url = f"http://{self.host}:{self.port}"
+        print(f"\n\033[92m\033[1m🚀 Web Interface is running! Click to open: {url}\033[0m\n")
+        await self.emit_log(f"Starting web interface on {url}")
         await self.server.serve()
 
     async def stop(self):
