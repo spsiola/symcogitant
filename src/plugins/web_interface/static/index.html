@@ -4,23 +4,50 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Symcogitant | Metabolism</title>
+    <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
+    <link rel="manifest" href="/static/site.webmanifest">
     <link rel="stylesheet" href="/static/style.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
 </head>
 <body>
-    <div class="glass-container">
-        <header>
-            <h1>Symcogitant</h1>
-            <div class="status-indicator">
-                <span class="pulse"></span>
-                <span>System Online</span>
+    <div class="app-layout">
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h2>Symcogitant</h2>
             </div>
-        </header>
-        <nav class="tabs-nav" id="tabs-nav">
-            <!-- Tabs will be injected here -->
-        </nav>
-        <main id="tabs-content-container">
-            <!-- Tab contents will be injected here -->
+            
+            <nav class="tabs-nav" id="tabs-nav">
+                <!-- Tabs will be injected here -->
+            </nav>
+            
+            <div class="sidebar-footer">
+                <button class="settings-btn" onclick="alert('Настройки в разработке')">
+                    ⚙️ Настройки
+                </button>
+                <button class="theme-toggle" id="theme-toggle-btn">
+                    🌓 Сменить тему
+                </button>
+                <div class="system-info">
+                    <div>v0.1.11</div>
+                    <div id="uptime-display">Uptime: 00:00:00</div>
+                </div>
+            </div>
+        </aside>
+
+        <main class="content-area">
+            <header class="content-header">
+                <h1 id="page-title">Журнал</h1>
+                <div class="status-indicator">
+                    <span class="pulse"></span>
+                    <span>System Online</span>
+                </div>
+            </header>
+            
+            <div id="tabs-content-container">
+                <!-- Tab contents will be injected here -->
+            </div>
         </main>
     </div>
     <script src="/static/app.js"></script>

@@ -1,8 +1,35 @@
 document.addEventListener('DOMContentLoaded', () => {
     const tabsNav = document.getElementById('tabs-nav');
     const tabsContentContainer = document.getElementById('tabs-content-container');
+    const pageTitle = document.getElementById('page-title');
     const ws = new WebSocket(`ws://${window.location.host}/ws/logs`);
     
+    // Theme toggle
+    const themeToggleBtn = document.getElementById('theme-toggle-btn');
+    if (themeToggleBtn) {
+        const savedTheme = localStorage.getItem('symcogitant_theme') || 'dark';
+        document.documentElement.setAttribute('data-theme', savedTheme);
+        themeToggleBtn.addEventListener('click', () => {
+            const currentTheme = document.documentElement.getAttribute('data-theme');
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            document.documentElement.setAttribute('data-theme', newTheme);
+            localStorage.setItem('symcogitant_theme', newTheme);
+        });
+    }
+
+    // Uptime tracker (client-side connection uptime for now)
+    const uptimeDisplay = document.getElementById('uptime-display');
+    const connectTime = Date.now();
+    if (uptimeDisplay) {
+        setInterval(() => {
+            const diff = Math.floor((Date.now() - connectTime) / 1000);
+            const h = String(Math.floor(diff / 3600)).padStart(2, '0');
+            const m = String(Math.floor((diff % 3600) / 60)).padStart(2, '0');
+            const s = String(diff % 60).padStart(2, '0');
+            uptimeDisplay.textContent = `Uptime: ${h}:${m}:${s}`;
+        }, 1000);
+    }
+
     // state mapping: source -> { btn, content, logContainer, metricsContainer, unreadCount }
     const tabs = {};
     let activeTabId = null;
@@ -109,10 +136,14 @@ document.addEventListener('DOMContentLoaded', () => {
             
             const chatModelSelect = document.createElement('select');
             chatModelSelect.className = 'chat-model-select';
+            chatModelSelect.id = `chat-model-select-${id}`;
+            chatModelSelect.name = `chat-model-select-${id}`;
             tabs[id].chatModelSelect = chatModelSelect;
             
             const chatKeySelect = document.createElement('select');
             chatKeySelect.className = 'chat-key-select';
+            chatKeySelect.id = `chat-key-select-${id}`;
+            chatKeySelect.name = `chat-key-select-${id}`;
             const defaultKeyOpt = document.createElement('option');
             defaultKeyOpt.value = 'default';
             defaultKeyOpt.textContent = 'Default Key';
@@ -136,11 +167,19 @@ document.addEventListener('DOMContentLoaded', () => {
             tabs[id].contextSizeBadge = contextSizeBadge;
             
             const chatCtxInput = document.createElement('input');
-            chatCtxInput.type = 'number';
+            chatCtxInput.type = 'text';
+            chatCtxInput.inputMode = 'numeric';
             chatCtxInput.className = 'chat-ctx-input';
+            chatCtxInput.id = `chat-ctx-input-${id}`;
+            chatCtxInput.name = `chat-ctx-input-${id}`;
             chatCtxInput.placeholder = 'Context Size (e.g. 8192)';
             chatCtxInput.title = 'Ограничение контекста (num_ctx). Оставьте пустым для авто.';
             tabs[id].chatCtxInput = chatCtxInput;
+            
+            chatCtxInput.addEventListener('input', () => {
+                chatCtxInput.value = chatCtxInput.value.replace(/\D/g, '');
+                updateContextWarning(id);
+            });
             
             chatHeaderLeft.appendChild(chatModelSelect);
             chatHeaderLeft.appendChild(chatKeySelect);
@@ -213,6 +252,9 @@ document.addEventListener('DOMContentLoaded', () => {
             chatInput.type = 'text';
             chatInput.placeholder = 'Type your message...';
             chatInput.className = 'chat-input';
+            chatInput.id = `chat-input-${id}`;
+            chatInput.name = `chat-input-${id}`;
+            tabs[id].chatInput = chatInput;
             
             const chatCounter = document.createElement('div');
             chatCounter.className = 'chat-counter';
@@ -222,6 +264,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const len = chatInput.value.length;
                 const approxTokens = Math.ceil(len / 3);
                 chatCounter.textContent = `${len} символов | ~${approxTokens} токенов`;
+                updateContextWarning(id);
             });
             
             chatInputWrapper.appendChild(chatInput);
@@ -289,6 +332,10 @@ document.addEventListener('DOMContentLoaded', () => {
         tabs[id].unreadCount = 0;
         updateBadge(id);
         
+        if (pageTitle) {
+            pageTitle.textContent = id;
+        }
+        
         // scroll to bottom
         tabs[id].logContainer.scrollTop = tabs[id].logContainer.scrollHeight;
     }
@@ -313,7 +360,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const msg = data.message || '';
         
         entry.innerHTML = `
-            <span style="color: #64748b">[${time}]</span>
+            <span style="color: var(--text-secondary)">[${time}]</span>
             <span class="log-source">[${id}]</span>
             <span>${msg}</span>
         `;
@@ -333,10 +380,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const time = new Date().toLocaleTimeString();
         
         entry.innerHTML = `
-            <span style="color: #64748b">[${time}]</span>
+            <span style="color: var(--text-secondary)">[${time}]</span>
             <span class="log-source">[${id}]</span>
-            <span style="color: #818cf8">[RAW EVENT]</span>
-            <pre style="margin: 5px 0 5px 0; padding: 10px; background: rgba(0,0,0,0.3); border-radius: 6px; font-family: monospace; white-space: pre-wrap; word-wrap: break-word; font-size: 0.85rem; color: #a5b4fc; border: 1px solid rgba(165, 180, 252, 0.2);">${JSON.stringify(data, null, 2)}</pre>
+            <span style="color: var(--accent)">[RAW EVENT]</span>
+            <pre style="margin: 5px 0 5px 0; padding: 10px; background: var(--bg-input-field); border-radius: 6px; font-family: monospace; white-space: pre-wrap; word-wrap: break-word; font-size: 0.85rem; color: var(--text-primary); border: 1px solid var(--border-color);">${JSON.stringify(data, null, 2)}</pre>
         `;
         
         logContainer.appendChild(entry);
@@ -552,6 +599,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (tabs[id].contextSizeBadge) {
             const totalChars = arr.reduce((sum, msg) => sum + (msg.content || '').length, 0);
             tabs[id].contextSizeBadge.textContent = `Контекст: ${totalChars} симв`;
+            updateContextWarning(id);
         }
         
         const entry = document.createElement('div');
@@ -588,6 +636,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Also update context size badge if messages array was just cleared
         if (tabs[id].messages_array && tabs[id].messages_array.length === 0 && tabs[id].contextSizeBadge) {
             tabs[id].contextSizeBadge.textContent = `Контекст: 0 симв`;
+            updateContextWarning(id);
         }
         
         const container = tabs[id].chatMessages;
@@ -698,6 +747,34 @@ document.addEventListener('DOMContentLoaded', () => {
         modal.appendChild(modalContent);
         document.body.appendChild(modal);
     }
+    function updateContextWarning(id) {
+        const tab = tabs[id];
+        if (!tab || !tab.chatCtxInput || !tab.chatInput) return;
+        
+        const limitStr = tab.chatCtxInput.value.trim();
+        if (!limitStr) {
+            tab.chatCtxInput.classList.remove('blinking-error');
+            return;
+        }
+        
+        const limit = parseInt(limitStr, 10);
+        if (isNaN(limit) || limit <= 0) {
+            tab.chatCtxInput.classList.remove('blinking-error');
+            return;
+        }
+        
+        const arr = tab.messages_array || [];
+        const historyChars = arr.reduce((sum, msg) => sum + (msg.content || '').length, 0);
+        const currentInputChars = tab.chatInput.value.length;
+        const total = historyChars + currentInputChars;
+        
+        if (total > limit) {
+            tab.chatCtxInput.classList.add('blinking-error');
+        } else {
+            tab.chatCtxInput.classList.remove('blinking-error');
+        }
+    }
+
 });
 
 
@@ -720,7 +797,7 @@ window.showRegistryModal = function() {
         
         const pre = document.createElement('pre');
         pre.id = 'registry-json-content';
-        pre.style.cssText = 'margin: 0; font-family: monospace; font-size: 0.9rem; color: #a5d6ff; white-space: pre-wrap; word-wrap: break-word;';
+        pre.style.cssText = 'margin: 0; font-family: monospace; font-size: 0.9rem; color: var(--text-primary); white-space: pre-wrap; word-wrap: break-word;';
         
         body.appendChild(pre);
         content.appendChild(header);
