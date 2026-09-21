@@ -57,3 +57,12 @@ plugins:
       timeout_sec: 1000
       default_model: "hf.co/unsloth/rnj-1-instruct-GGUF:Q4_K_M"
       window_size: 100
+
+  - module: "src.plugins.telegram_group_dispatcher.plugin"
+    class: "TelegramGroupDispatcher"
+    enabled: true
+    config:
+      telegram_group_dispatcher:
+        session_timeout_seconds: 1000
+        max_context_messages: 100
+        default_model: "hf.co/unsloth/rnj-1-instruct-GGUF:Q4_K_M"

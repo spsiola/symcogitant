@@ -42,12 +42,7 @@ class MediaTelegramUserPlugin(BasePlugin):
             return str(peer_id)
 
     async def _typing_loop(self, chat_id):
-        import random
         try:
-            # Сначала отмечаем сообщения прочитанными
-            await self.client.send_read_acknowledge(chat_id)
-            
-            await asyncio.sleep(random.uniform(1.0, 3.0))
             async with self.client.action(chat_id, 'typing'):
                 await asyncio.Event().wait() # Блокируемся, пока не отменят таску
         except asyncio.CancelledError:
@@ -248,3 +243,8 @@ class MediaTelegramUserPlugin(BasePlugin):
                     task = self._typing_tasks.pop(chat_id, None)
                     if task:
                         task.cancel()
+                elif action == "read":
+                    try:
+                        await self.client.send_read_acknowledge(chat_id)
+                    except Exception as e:
+                        await self.emit_log(f"Failed to send read acknowledge for {chat_id}: {e}", "ERROR")
