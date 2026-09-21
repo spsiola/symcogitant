@@ -40,6 +40,8 @@ class MediaTelegramUserPlugin(BasePlugin):
             return str(peer_id)
 
     async def run(self):
+        self.event_bus.subscribe(self._handle_event)
+        
         if not self.api_id or not self.api_hash:
             await self.emit_log("TG_API_ID or TG_API_HASH not set in data/.env", "ERROR")
             return
@@ -58,6 +60,8 @@ class MediaTelegramUserPlugin(BasePlugin):
             @self.client.on(events.NewMessage)
             async def handler(event):
                 msg_id = event.message.id
+                is_private = event.is_private
+                chat_id_raw = event.chat_id
                 sender_name = await self.get_entity_name(event.sender_id)
                 chat_name = await self.get_entity_name(event.chat_id)
                 text = event.message.message
@@ -87,6 +91,8 @@ class MediaTelegramUserPlugin(BasePlugin):
                     "msg_id": msg_id,
                     "sender": sender_name,
                     "chat": chat_name,
+                    "chat_id": chat_id_raw,
+                    "is_private": is_private,
                     "text": text
                 })
                 
@@ -196,3 +202,14 @@ class MediaTelegramUserPlugin(BasePlugin):
             await self.client.disconnect()
             
         await super().stop()
+
+    async def _handle_event(self, event: dict):
+        if event.get("type") == "telegram_send_message":
+            chat_id = event.get("chat_id")
+            text = event.get("text")
+            if chat_id and text and self.client:
+                try:
+                    await self.client.send_message(chat_id, text)
+                    await self.emit_log(f"Sent message to {chat_id}: {text[:50]}...", "INFO")
+                except Exception as e:
+                    await self.emit_log(f"Failed to send message to {chat_id}: {e}", "ERROR")

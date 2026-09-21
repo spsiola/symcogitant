@@ -49,3 +49,11 @@ plugins:
     class: "LLMChatPlugin"
     enabled: true
     config: {}
+
+  - module: "src.plugins.telegram_private_dispatcher.plugin"
+    class: "TelegramPrivateDispatcher"
+    enabled: true
+    config:
+      timeout_sec: 1000
+      default_model: "hf.co/unsloth/rnj-1-instruct-GGUF:Q4_K_M"
+      window_size: 100
