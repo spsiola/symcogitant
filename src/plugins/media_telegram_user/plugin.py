@@ -27,6 +27,8 @@ class MediaTelegramUserPlugin(BasePlugin):
         # Кэш для отслеживания изменений сообщений и реакций
         self.msg_cache = {} # msg_id -> dict {"text": text, "chat_name": name, "sender_name": name}
         self.reactions_cache = {} # msg_id -> set of (peer_id, emoticon)
+        
+        self._typing_tasks = {} # chat_id -> asyncio.Task
 
     async def get_entity_name(self, peer_id):
         """Возвращает форматированную строку 'Имя (ID)' для чатов и пользователей."""
@@ -38,6 +40,20 @@ class MediaTelegramUserPlugin(BasePlugin):
             return f"{name} ({peer_id})"
         except Exception:
             return str(peer_id)
+
+    async def _typing_loop(self, chat_id):
+        import random
+        try:
+            # Сначала отмечаем сообщения прочитанными
+            await self.client.send_read_acknowledge(chat_id)
+            
+            await asyncio.sleep(random.uniform(1.0, 3.0))
+            async with self.client.action(chat_id, 'typing'):
+                await asyncio.Event().wait() # Блокируемся, пока не отменят таску
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            await self.emit_log(f"Typing action error for {chat_id}: {e}", "ERROR")
 
     async def run(self):
         self.event_bus.subscribe(self._handle_event)
@@ -204,12 +220,31 @@ class MediaTelegramUserPlugin(BasePlugin):
         await super().stop()
 
     async def _handle_event(self, event: dict):
-        if event.get("type") == "telegram_send_message":
+        event_type = event.get("type")
+        
+        if event_type == "telegram_send_message":
             chat_id = event.get("chat_id")
             text = event.get("text")
+            
+            task = self._typing_tasks.pop(chat_id, None)
+            if task:
+                task.cancel()
+                
             if chat_id and text and self.client:
                 try:
                     await self.client.send_message(chat_id, text)
                     await self.emit_log(f"Sent message to {chat_id}: {text[:50]}...", "INFO")
                 except Exception as e:
                     await self.emit_log(f"Failed to send message to {chat_id}: {e}", "ERROR")
+                    
+        elif event_type == "telegram_chat_action":
+            chat_id = event.get("chat_id")
+            action = event.get("action")
+            if chat_id and self.client:
+                if action == "typing":
+                    if chat_id not in self._typing_tasks:
+                        self._typing_tasks[chat_id] = asyncio.create_task(self._typing_loop(chat_id))
+                elif action == "cancel":
+                    task = self._typing_tasks.pop(chat_id, None)
+                    if task:
+                        task.cancel()

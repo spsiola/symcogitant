@@ -96,6 +96,13 @@ class PrivateDialogSession:
                 
                 # Отправляем запрос
                 await self.dispatcher.emit_log(f"Session {self.chat_id}: sending llm_request {req_id}", "INFO")
+                
+                await self.dispatcher.event_bus.publish({
+                    "type": "telegram_chat_action",
+                    "chat_id": self.chat_id,
+                    "action": "typing"
+                })
+                
                 await self.dispatcher.send_llm_request(req_id, self.chat_id, request_data)
                 
                 # Ждем ответ. Lock не нужен, так как мы блокируем цикл while
