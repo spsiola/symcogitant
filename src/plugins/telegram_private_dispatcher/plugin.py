@@ -1,9 +1,9 @@
 import asyncio
 from typing import Any, Dict
-from src.core.base import BasePlugin
+from src.core.base import BaseAgentPlugin
 from .session import PrivateDialogSession
 
-class TelegramPrivateDispatcher(BasePlugin):
+class TelegramPrivateDispatcher(BaseAgentPlugin):
     """
     Маршрутизатор для приватных сообщений Telegram.
     Управляет сессиями (PrivateDialogSession) по chat_id.

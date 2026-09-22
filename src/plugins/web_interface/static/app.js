@@ -836,13 +836,19 @@ document.addEventListener('DOMContentLoaded', () => {
             statusRow.className = 'harness-card-status';
             
             const dot = document.createElement('span');
-            dot.className = 'status-dot ' + (plugin.status === 'alive' ? 'alive' : 'stopped');
+            let statusClass = 'stopped';
+            if (plugin.status === 'alive') statusClass = 'alive';
+            else if (plugin.status === 'paused') statusClass = 'paused';
+            
+            dot.className = 'status-dot ' + statusClass;
             
             const txt = document.createElement('span');
             if (plugin.status === 'alive') {
                 txt.className = 'status-text';
                 txt.dataset.checkTime = Date.now();
                 txt.textContent = `Alive (checked 0 sec ago)`;
+            } else if (plugin.status === 'paused') {
+                txt.textContent = 'Paused';
             } else {
                 txt.textContent = 'Stopped';
             }

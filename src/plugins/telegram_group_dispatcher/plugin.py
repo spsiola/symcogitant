@@ -1,10 +1,10 @@
 import asyncio
 import re
 from typing import Any, Dict
-from src.core.base import BasePlugin
+from src.core.base import BaseAgentPlugin
 from .session import GroupDialogSession
 
-class TelegramGroupDispatcher(BasePlugin):
+class TelegramGroupDispatcher(BaseAgentPlugin):
     """
     Маршрутизатор для групповых сообщений Telegram.
     Управляет сессиями (GroupDialogSession) по chat_id.

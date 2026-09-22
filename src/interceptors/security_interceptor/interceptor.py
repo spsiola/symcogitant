@@ -1,4 +1,5 @@
 import os
+import re
 from typing import Any, Dict, Tuple
 from src.core.base import BaseInterceptor
 
@@ -23,6 +24,22 @@ class SecurityInterceptor(BaseInterceptor):
         
         if name in self.blocked_tools:
             return False, f"Tool '{name}' is forbidden by security policies (file deletion blocked)."
+
+        if name == "run_command":
+            command = kwargs.get("command", "")
+            
+            # 1. Directory Traversal
+            if "../" in command:
+                return False, "Security violation: Directory traversal ('../') is not allowed in run_command."
+                
+            # 2. Block dangerous binaries
+            dangerous_binaries = r'\b(rm|sudo|mv|chmod|chown|kill|pkill)\b'
+            if re.search(dangerous_binaries, command):
+                return False, "Security violation: Dangerous command used (rm, sudo, mv, chmod, chown, kill, pkill)."
+                
+            # 3. Block redirecting output to absolute root paths
+            if "> /" in command or ">> /" in command:
+                return False, "Security violation: Writing to absolute root paths is not allowed."
 
         base_dir = os.path.abspath(os.getcwd())
 

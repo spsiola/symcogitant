@@ -711,6 +711,10 @@ body {
 }
 
 .status-dot.stopped {
-    background-color: #ef4444; /* red */
-    box-shadow: 0 0 6px rgba(239, 68, 68, 0.5);
+    background-color: var(--color-error);
+    box-shadow: 0 0 8px rgba(220, 38, 38, 0.4);
+}
+.status-dot.paused {
+    background-color: var(--color-warning);
+    box-shadow: 0 0 8px rgba(245, 158, 11, 0.4);
 }

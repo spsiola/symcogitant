@@ -86,11 +86,19 @@ class PrivateDialogSession:
                     if m.get("role") != "system":
                         context_msgs.append({"role": m["role"], "content": m["content"]})
                         
+                # Запрашиваем модель у диспетчера
+                model = self.dispatcher.get_llm_model({"chat_id": self.chat_id})
+                if not model:
+                    await self.dispatcher.emit_log(f"Session {self.chat_id}: no model available, pausing response.", "WARNING")
+                    await self.incoming_queue.put({"text": combined_text, "chat_id": self.chat_id})
+                    await asyncio.sleep(5) # Ждем перед повторной попыткой
+                    continue
+
                 req_id = f"tg_priv_{self.chat_id}_{int(time.time()*1000)}"
                 request_data = {
                     "type": "llm_request",
                     "request_id": req_id,
-                    "model": self.default_model,
+                    "model": model,
                     "messages": context_msgs
                 }
                 
@@ -126,19 +134,28 @@ class PrivateDialogSession:
                 if llm_event.get("type") == "llm_response":
                     reply = llm_event.get("reply", "")
                     if reply:
-                        self._append_to_history({"role": "assistant", "content": reply})
-                        await self.dispatcher.send_telegram_message(self.chat_id, reply)
-                        await self.dispatcher.emit_log(f"Session {self.chat_id}: sent reply to telegram", "INFO")
+                        if "[NO ANSWER]" in reply:
+                            await self.dispatcher.emit_log(f"Session {self.chat_id}: ignored message due to [NO ANSWER]", "INFO")
+                            await self.dispatcher.event_bus.publish({"type": "telegram_chat_action", "source": self.dispatcher.__class__.__name__, "chat_id": self.chat_id, "action": "cancel"})
+                        else:
+                            self._append_to_history({"role": "assistant", "content": reply})
+                            telegram_reply = reply + f"\n\n---\n🤖 `{model}`"
+                            await self.dispatcher.send_telegram_message(self.chat_id, telegram_reply)
+                            await self.dispatcher.emit_log(f"Session {self.chat_id}: sent reply to telegram", "INFO")
                 elif llm_event.get("type") == "llm_response_error":
                     error = llm_event.get("error", "Unknown LLM error")
+                    self.dispatcher.report_llm_error(model, error)
                     await self.dispatcher.send_telegram_message(self.chat_id, f"[System Error] {error}")
+                    await self.dispatcher.event_bus.publish({"type": "telegram_chat_action", "source": self.dispatcher.__class__.__name__, "chat_id": self.chat_id, "action": "cancel"})
                     
         except asyncio.TimeoutError:
             # Сессия завершается по таймауту неактивности
             await self.dispatcher.emit_log(f"Session {self.chat_id} timed out.", "INFO")
+            await self.dispatcher.event_bus.publish({"type": "telegram_chat_action", "source": self.dispatcher.__class__.__name__, "chat_id": self.chat_id, "action": "cancel"})
             await self.dispatcher.close_session(self.chat_id)
         except Exception as e:
             import traceback
             err = traceback.format_exc()
             await self.dispatcher.emit_log(f"Session {self.chat_id} crashed: {e}\n{err}", "ERROR")
+            await self.dispatcher.event_bus.publish({"type": "telegram_chat_action", "source": self.dispatcher.__class__.__name__, "chat_id": self.chat_id, "action": "cancel"})
             await self.dispatcher.close_session(self.chat_id)

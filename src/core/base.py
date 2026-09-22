@@ -12,6 +12,7 @@ class BaseModule(ABC):
         self.event_bus = event_bus
         self.core = core
         self.running = False
+        self.status = "alive"
         self.task: asyncio.Task | None = None
         self.start_time: float | None = None
         self.description: str = "Описание модуля не задано."
@@ -57,7 +58,7 @@ class BaseModule(ABC):
         }
         if self.running and self.start_time:
             uptime = int(time.time() - self.start_time)
-            status_info.update({"status": "alive", "uptime": uptime})
+            status_info.update({"status": getattr(self, "status", "alive"), "uptime": uptime})
         else:
             status_info.update({"status": "stopped", "uptime": 0})
         return status_info
@@ -67,6 +68,35 @@ class BasePlugin(BaseModule):
     @abstractmethod
     async def run(self):
         pass
+
+class BaseAgentPlugin(BasePlugin):
+    """
+    Базовый класс для плагинов, которые используют LLM.
+    Предоставляет методы для получения подходящей LLM от ModelSelectorWorker.
+    """
+    def get_llm_model(self, context: dict) -> str | None:
+        if not self.core:
+            return None
+            
+        selector = self.core.get_worker("ModelSelectorWorker")
+        if selector:
+            model = selector.get_model(self.__class__.__name__, context)
+            if not model:
+                self.status = "paused"
+                asyncio.create_task(self.emit_log(
+                    f"No LLM model available for context {context}, pausing plugin.", level="WARNING"
+                ))
+            else:
+                self.status = "alive"
+            return model
+        return None
+
+    def report_llm_error(self, model: str, error: str):
+        if not self.core:
+            return
+        selector = self.core.get_worker("ModelSelectorWorker")
+        if selector:
+            selector.report_failure(self.__class__.__name__, model, error)
 
 class BaseDaemon(BaseModule):
     """Фоновые процессы, работающие постоянно (мониторинг, гомеостаз)."""

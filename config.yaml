@@ -42,6 +42,25 @@ workers:
       default_model: "qwen2.5-coder:7b"
       num_ctx: 8192
 
+  - module: "src.workers.model_selector.worker"
+    class: "ModelSelectorWorker"
+    enabled: true
+    config:
+      routing:
+        TelegramPrivateDispatcher:
+          default_model: "qwen2.5-coder:7b"
+          rules:
+            - condition:
+                chat_id: [428611700, 1380935931] # Доверенные контакты
+              model: "openrouter/anthropic/claude-opus-5"
+            
+        TelegramGroupDispatcher:
+          default_model: "qwen2.5-coder:7b"
+          rules:
+            - condition:
+                chat_id: [-510553680] # Важная рабочая группа
+              model: "openrouter/google/gemini-3.8-flash"
+
 interceptors:
   - module: "src.interceptors.security_interceptor.interceptor"
     class: "SecurityInterceptor"

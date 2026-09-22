@@ -68,6 +68,10 @@ class MediaTelegramUserPlugin(BasePlugin):
 
             await self.emit_log("Connected to Telegram successfully.", "INFO")
             
+            me = await self.client.get_me()
+            self.my_id = me.id
+            self.my_username = me.username
+            
             # 1. Новые сообщения
             @self.client.on(events.NewMessage)
             async def handler(event):
@@ -97,6 +101,21 @@ class MediaTelegramUserPlugin(BasePlugin):
                 chat_name = await self.get_entity_name(event.chat_id)
                 text = event.message.message
                 
+                is_reply_to_me = False
+                if event.message.is_reply:
+                    try:
+                        reply_msg = await event.message.get_reply_message()
+                        if reply_msg and reply_msg.sender_id == self.my_id:
+                            is_reply_to_me = True
+                    except Exception:
+                        pass
+                        
+                mentions_me = False
+                if self.my_username:
+                    lower_text = text.lower()
+                    if f"@{self.my_username.lower()}" in lower_text or f"t.me/{self.my_username.lower()}" in lower_text:
+                        mentions_me = True
+                    
                 await self.event_bus.publish({
                     "type": "telegram_new_message",
                     "source": "MediaTelegramUserPlugin",
@@ -105,7 +124,9 @@ class MediaTelegramUserPlugin(BasePlugin):
                     "chat": chat_name,
                     "chat_id": chat_id_raw,
                     "is_private": is_private,
-                    "text": text
+                    "text": text,
+                    "is_reply_to_me": is_reply_to_me,
+                    "mentions_me": mentions_me
                 })
                 
                 display_text = text if text and len(text) < 100 else (text[:97] + "..." if text else "[Media/Non-text]")
