@@ -2,6 +2,7 @@ import asyncio
 import importlib
 import logging
 import signal
+from typing import cast
 
 import yaml
 
@@ -46,13 +47,13 @@ class SymcogitantCore:
         return None
 
     def get_plugin(self, name: str) -> BasePlugin | None:
-        return self.get_module(name)
+        return cast(BasePlugin | None, self.get_module(name))
 
     def get_daemon(self, name: str) -> BaseDaemon | None:
-        return self.get_module(name)
+        return cast(BaseDaemon | None, self.get_module(name))
 
     def get_worker(self, name: str) -> BaseWorker | None:
-        return self.get_module(name)
+        return cast(BaseWorker | None, self.get_module(name))
 
     def _load_module(self, config: dict, expected_type: type) -> BaseModule | None:
         try:
@@ -101,9 +102,12 @@ class SymcogitantCore:
         config = self.load_config()
         self.event_bus.subscribe(self._log_subscriber)
 
-        # Load tools
+        # Загрузка инструментов
         self.tools_registry.load_from_directory("src/tools")
         self.tools_registry.load_from_directory("data/tools")
+        # Загрузка скиллов (Progressive Disclosure)
+        self.tools_registry.load_skills_from_directory("src/skills")
+        self.tools_registry.load_skills_from_directory("data/skills")
 
         # Initialization
         await self._start_modules(self.daemons, config.get('daemons', []), BaseDaemon, "daemon")
@@ -141,6 +145,8 @@ class SymcogitantCore:
         for module in self.all_modules:
             await module.stop()
         logger.info("Shutdown complete.")
+        import os
+        os._exit(0)
 
 def main():
     core = SymcogitantCore()

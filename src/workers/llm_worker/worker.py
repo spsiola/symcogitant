@@ -338,12 +338,17 @@ class LLMWorker(BaseWorker):
                 f"Cost: ${cost_usd:.6f}"
             )
             
+            actual_response_model = getattr(response, "model", model)
+            if not isinstance(actual_response_model, str):
+                actual_response_model = model
+
             await self.event_bus.publish({
                 "type": "llm_response",
                 "source": self.__class__.__name__,
                 "request_id": request_id,
                 "reply": reply_text,
                 "model": model,
+                "response_model": actual_response_model,
                 "timestamp": datetime.now(UTC).isoformat(),
                 "usage": {
                     "prompt_tokens": prompt_tokens,

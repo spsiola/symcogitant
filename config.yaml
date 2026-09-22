@@ -22,6 +22,11 @@ daemons:
         - "openrouter/deepseek/deepseek-v4.1-flash"
         - "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
 
+  - module: "src.daemons.mcp_manager.daemon"
+    class: "MCPManagerDaemon"
+    enabled: true
+    config: {}
+
 workers:
   - module: "src.workers.tool_worker.worker"
     class: "ToolWorker"
@@ -44,6 +49,10 @@ interceptors:
     config: {}
 
 mcp_servers:
+  weather:
+    command: ".venv/bin/python"
+    args: ["data/mcp_weather.py"]
+
 
 plugins:
   - module: "src.plugins.web_interface.plugin"

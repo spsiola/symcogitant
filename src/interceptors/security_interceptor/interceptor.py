@@ -1,3 +1,4 @@
+import os
 from typing import Any, Dict, Tuple
 from src.core.base import BaseInterceptor
 
@@ -8,6 +9,7 @@ class SecurityInterceptor(BaseInterceptor):
     def __init__(self, config: Dict[str, Any], event_bus: Any, core: Any = None):
         super().__init__(config, event_bus, core=core)
         self.description = "Базовая проверка безопасности вызовов инструментов"
+        self.blocked_tools = {"delete_file", "remove_file", "rm", "rmdir", "delete_directory", "delete"}
 
     async def on_start(self):
         await self.emit_log("SecurityInterceptor started.")
@@ -19,6 +21,19 @@ class SecurityInterceptor(BaseInterceptor):
         """
         await self.emit_log(f"[SECURITY] Checking tool call '{name}' with args: {kwargs}")
         
-        # На первом этапе - заглушка, разрешаем всё.
-        # В будущем здесь можно проверять kwargs['path'] на выход за пределы песочницы и т.д.
+        if name in self.blocked_tools:
+            return False, f"Tool '{name}' is forbidden by security policies (file deletion blocked)."
+
+        base_dir = os.path.abspath(os.getcwd())
+
+        for key, val in kwargs.items():
+            if isinstance(val, str):
+                # Apply path checking only for arguments that seem to represent paths
+                key_lower = key.lower()
+                if "path" in key_lower or "file" in key_lower or "dir" in key_lower:
+                    resolved = os.path.abspath(val)
+                    # Check if the resolved path starts with the base directory
+                    if not resolved.startswith(base_dir):
+                        return False, f"Access denied: path '{val}' in parameter '{key}' is outside the working directory."
+        
         return True, ""

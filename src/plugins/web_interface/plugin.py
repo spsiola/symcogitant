@@ -54,6 +54,17 @@ class WebInterfacePlugin(BasePlugin):
                 "type": "init_data",
                 "data": init_data_payload
             })
+            
+            if self.core:
+                harness_status = {
+                    "type": "harness_status",
+                    "source": "harness core",
+                    "daemons": [m.get_status() for m in getattr(self.core, 'daemons', [])],
+                    "workers": [m.get_status() for m in getattr(self.core, 'workers', [])],
+                    "interceptors": [m.get_status() for m in getattr(self.core, 'interceptors', [])],
+                    "plugins": [m.get_status() for m in getattr(self.core, 'plugins', [])],
+                }
+                await websocket.send_json(harness_status)
             try:
                 while True:
                     text_data = await websocket.receive_text()

@@ -99,13 +99,6 @@ class LLMChatPlugin(BasePlugin):
             self._save_history()
             self.tool_iteration_count = 0
             
-            # Отправляем системное уведомление в чат, что запрос ушел
-            await self.event_bus.publish({
-                "type": "ui_chat_system",
-                "source": self.__class__.__name__,
-                "message": "Запрос отправлен в LLMReflex..."
-            })
-            
             # Формируем запрос для LLMReflex
             req_id = f"chat_{int(time.time()*1000)}"
             request_data = {
@@ -122,6 +115,16 @@ class LLMChatPlugin(BasePlugin):
             if event.get("api_key_name"):
                 request_data["api_key_name"] = event.get("api_key_name")
                 self.last_api_key_name = event.get("api_key_name")
+
+            model_msg = getattr(self, "last_llm_model", "unknown model")
+            key_msg = f" с ключом {self.last_api_key_name}" if getattr(self, "last_api_key_name", None) else ""
+
+            # Отправляем системное уведомление в чат, что запрос ушел
+            await self.event_bus.publish({
+                "type": "ui_chat_system",
+                "source": self.__class__.__name__,
+                "message": f"Запрос отправлен в LLMWorker (модель: {model_msg}{key_msg})..."
+            })
             
             # Прокидываем все инструменты, если реестр доступен
             if hasattr(self.core, "tools_registry") and self.core.tools_registry:
@@ -183,7 +186,7 @@ class LLMChatPlugin(BasePlugin):
             
             usage = event.get("usage", {})
             latency = event.get("latency_sec", 0)
-            model_name = event.get("model", "unknown")
+            model_name = event.get("response_model") or event.get("model", "unknown")
             timestamp = event.get("timestamp", "")
             
             # Сохраняем ответ ассистента в историю (для API важно передавать чистые tool_calls)
@@ -215,7 +218,7 @@ class LLMChatPlugin(BasePlugin):
             
             total_chars = sum(len(m.get("content", "")) for m in self.messages)
             
-            stats_msg = f"Ответ получен за {latency:.2f}с. Токены (ЛЛМ): {prompt_tokens} prompt + {completion_tokens} completion = {total_tokens}. Размер контекста (симв): {total_chars}."
+            stats_msg = f"Ответ получен от {model_name} за {latency:.2f}с. Токены (ЛЛМ): {prompt_tokens} prompt + {completion_tokens} completion = {total_tokens}. Размер контекста (симв): {total_chars}."
             await self.event_bus.publish({
                 "type": "ui_chat_system",
                 "source": self.__class__.__name__,

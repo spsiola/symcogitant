@@ -573,6 +573,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const modelSelect = tabs['LLMChatPlugin'].chatModelSelect;
         const keySelect = tabs['LLMChatPlugin'].chatKeySelect;
         
+        const currentKeyVal = keySelect.value;
+
         const selectedModel = modelSelect.value;
         const provider = selectedModel.includes('/') ? selectedModel.split('/')[0].toLowerCase() : null;
         
@@ -593,6 +595,9 @@ document.addEventListener('DOMContentLoaded', () => {
             opt.textContent = keysForProvider.length === 1 && keysForProvider[0] !== 'default' ? keysForProvider[0] : 'Default Key';
             keySelect.appendChild(opt);
             keySelect.disabled = true;
+        }
+        if (Array.from(keySelect.options).some(o => o.value === currentKeyVal)) {
+            keySelect.value = currentKeyVal;
         }
     }
 
@@ -813,8 +818,10 @@ document.addEventListener('DOMContentLoaded', () => {
         plugins.forEach(plugin => {
             const card = document.createElement('div');
             card.className = 'harness-card';
-            if (plugin.name.includes('Reflex')) {
-                card.classList.add('reflex-card');
+            if (plugin.name.includes('Daemon')) {
+                card.classList.add('daemon-card');
+            } else if (plugin.name.includes('Plugin')) {
+                card.classList.add('plugin-card');
             }
             
             const title = document.createElement('div');

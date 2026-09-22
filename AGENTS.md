@@ -25,7 +25,7 @@ When you start a new conversation or session in this repository, **YOUR FIRST AC
 ## 5. When Committing a Version
 When a user requests to commit a new version, the following steps are strictly required: 
 1. **Analyze:** View the `git diff` and review the contents of the current dialog to understand all changes made.
-2. **Version Bump:** Determine the new version number (following Semantic Versioning) and update the version field in `docs/STATE.md`.
+2. **Version Bump:** Determine the new version number (following Semantic Versioning) and update the version field in BOTH `docs/STATE.md` and `pyproject.toml`.
 3. **Documentation:** 
    - Update `docs/CHANGELOG.md` with a detailed new version entry.
    - Ensure all high-level changes are reflected in `docs/STATE.md` and `docs/ARCHITECTURE.md`.

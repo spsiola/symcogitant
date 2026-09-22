@@ -653,11 +653,22 @@ body {
     transition: transform 0.2s, box-shadow 0.2s;
 }
 
-[data-theme="dark"] .harness-card.reflex-card {
-    background: rgba(255, 255, 255, 0.04);
+[data-theme="dark"] .harness-card.daemon-card {
+    background: rgba(16, 185, 129, 0.04);
+    border-color: rgba(16, 185, 129, 0.2);
 }
-[data-theme="light"] .harness-card.reflex-card {
-    background: rgba(0, 0, 0, 0.04);
+[data-theme="light"] .harness-card.daemon-card {
+    background: rgba(16, 185, 129, 0.04);
+    border-color: rgba(16, 185, 129, 0.3);
+}
+
+[data-theme="dark"] .harness-card.plugin-card {
+    background: rgba(14, 165, 233, 0.04);
+    border-color: rgba(14, 165, 233, 0.2);
+}
+[data-theme="light"] .harness-card.plugin-card {
+    background: rgba(14, 165, 233, 0.04);
+    border-color: rgba(14, 165, 233, 0.3);
 }
 
 .harness-card:hover {
