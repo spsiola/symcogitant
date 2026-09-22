@@ -85,21 +85,17 @@ class SymcogitantCore:
                 await asyncio.wait_for(self._stop_event.wait(), timeout=watchdog_interval)
             except asyncio.TimeoutError:
                 # Таймаут сработал — опрашиваем плагины
+                plugin_statuses = []
                 for plugin in self.plugins:
                     status_info = plugin.get_status()
-                    plugin_name = plugin.__class__.__name__
-                    status_str = f"status: {status_info['status']} {status_info['uptime']} sec"
+                    plugin_statuses.append(status_info)
                     
-                    log_msg = f"plugin {plugin_name} -> {status_str}"
-                    logger.info(log_msg)
-                    
-                    # Отправляем лог в шину от имени ядра
-                    asyncio.create_task(self.event_bus.publish({
-                        "type": "log",
-                        "source": "harness core",
-                        "level": "INFO",
-                        "message": log_msg
-                    }))
+                # Отправляем единое событие статуса системы
+                asyncio.create_task(self.event_bus.publish({
+                    "type": "harness_status",
+                    "source": "harness core",
+                    "plugins": plugin_statuses
+                }))
         
         logger.info("Shutting down...")
         await self.stop()

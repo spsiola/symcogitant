@@ -11,6 +11,7 @@ class TelegramGroupDispatcher(BasePlugin):
     """
     def __init__(self, config: Dict[str, Any], event_bus: Any, core: Any = None):
         super().__init__(config, event_bus, core=core)
+        self.description = "Диспетчер для маршрутизации и обработки сообщений в групповых чатах."
         self.sessions = {} # chat_id -> GroupDialogSession
         self.pending_llm_requests = {} # request_id -> chat_id
         
@@ -55,6 +56,7 @@ class TelegramGroupDispatcher(BasePlugin):
     async def send_telegram_message(self, chat_id: int, text: str):
         await self.event_bus.publish({
             "type": "telegram_send_message",
+            "source": self.__class__.__name__,
             "chat_id": chat_id,
             "text": text
         })

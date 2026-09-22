@@ -102,12 +102,14 @@ class PrivateDialogSession:
                 await asyncio.sleep(random.uniform(1.0, 3.0))
                 await self.dispatcher.event_bus.publish({
                     "type": "telegram_chat_action",
+                    "source": self.dispatcher.__class__.__name__,
                     "chat_id": self.chat_id,
                     "action": "read"
                 })
                 
                 await self.dispatcher.event_bus.publish({
                     "type": "telegram_chat_action",
+                    "source": self.dispatcher.__class__.__name__,
                     "chat_id": self.chat_id,
                     "action": "typing"
                 })

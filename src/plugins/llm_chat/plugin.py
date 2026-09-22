@@ -14,6 +14,7 @@ class LLMChatPlugin(BasePlugin):
     """
     def __init__(self, config: Dict[str, Any], event_bus: Any, core: Any = None):
         super().__init__(config, event_bus, core=core)
+        self.description = "Интерфейс для прямого общения с LLM моделями через WebUI."
         self.history_dir = os.path.join(os.getcwd(), "data", "logs", "LLMChatPlugin")
         self.session_file = os.path.join(self.history_dir, "chat_history.json")
         self.messages = []

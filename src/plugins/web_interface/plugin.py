@@ -12,6 +12,7 @@ from src.core.plugin import BasePlugin
 class WebInterfacePlugin(BasePlugin):
     def __init__(self, config, event_bus, core=None):
         super().__init__(config, event_bus, core=core)
+        self.description = "Веб-интерфейс платформы и мониторинг в реальном времени."
         self.app = FastAPI(title="Symcogitant Web Interface")
         self.host = self.config.get("host", "127.0.0.1")
         self.port = self.config.get("port", 4217)
@@ -35,20 +36,23 @@ class WebInterfacePlugin(BasePlugin):
             }))
             
             # Direct query to SystemMonitorReflex for instant model list
+            init_data_payload = {
+                "server_start_time": self.start_time * 1000 if self.start_time else None
+            }
             if self.core:
                 sys_monitor = self.core.get_plugin("SystemMonitorReflex")
                 if sys_monitor:
                     try:
                         models = sys_monitor.get_models()
                         if models:
-                            await websocket.send_json({
-                                "type": "init_data",
-                                "data": {
-                                    "llm_models": models
-                                }
-                            })
+                            init_data_payload["llm_models"] = models
                     except Exception as e:
                         await self.emit_log(f"Failed to fetch models from SystemMonitorReflex: {e}", level="ERROR")
+                        
+            await websocket.send_json({
+                "type": "init_data",
+                "data": init_data_payload
+            })
             try:
                 while True:
                     text_data = await websocket.receive_text()

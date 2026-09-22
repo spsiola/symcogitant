@@ -18,6 +18,7 @@ class LLMReflex(BasePlugin):
     """
     def __init__(self, config: dict[str, Any], event_bus: Any, core: Any = None):
         super().__init__(config, event_bus, core=core)
+        self.description = "Интеграция с LLM, кэширование и расчет стоимости запросов."
         
         # Получаем параметры подключения
         self.default_base_url = self.config.get("base_url", "http://127.0.0.1:11434/v1")
@@ -288,6 +289,7 @@ class LLMReflex(BasePlugin):
             
             await self.event_bus.publish({
                 "type": "llm_response",
+                "source": self.__class__.__name__,
                 "request_id": request_id,
                 "reply": reply_text,
                 "model": model,
@@ -307,6 +309,7 @@ class LLMReflex(BasePlugin):
             
             await self.event_bus.publish({
                 "type": "llm_response_error",
+                "source": self.__class__.__name__,
                 "request_id": request_id,
                 "error": str(e)
             })

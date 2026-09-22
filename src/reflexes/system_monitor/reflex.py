@@ -15,6 +15,7 @@ from src.core.plugin import BasePlugin
 class SystemMonitorReflex(BasePlugin):
     def __init__(self, config, event_bus, core=None):
         super().__init__(config, event_bus, core=core)
+        self.description = "Сбор системных метрик и мониторинг доступности локальных нейросетей."
         self.interval = self.config.get("interval", 60)
         self.endpoints = self.config.get("llm_endpoints", {})
         

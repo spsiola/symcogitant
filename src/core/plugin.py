@@ -14,6 +14,7 @@ class BasePlugin(ABC):
         self.running = False
         self.task: asyncio.Task | None = None
         self.start_time: float | None = None
+        self.description: str = "Описание плагина не задано."
 
     @abstractmethod
     async def run(self):
@@ -48,7 +49,13 @@ class BasePlugin(ABC):
 
     def get_status(self) -> dict:
         """Возвращает текущий статус плагина."""
+        status_info = {
+            "name": self.__class__.__name__,
+            "description": self.description
+        }
         if self.running and self.start_time:
             uptime = int(time.time() - self.start_time)
-            return {"status": "alive", "uptime": uptime}
-        return {"status": "stopped", "uptime": 0}
+            status_info.update({"status": "alive", "uptime": uptime})
+        else:
+            status_info.update({"status": "stopped", "uptime": 0})
+        return status_info

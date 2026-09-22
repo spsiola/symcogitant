@@ -13,6 +13,7 @@ class MediaTelegramUserPlugin(BasePlugin):
     """
     def __init__(self, config, event_bus, core=None):
         super().__init__(config, event_bus, core=core)
+        self.description = "Интеграция с Telegram (User API) для перехвата сообщений и действий пользователя."
         
         env_path = os.path.join("data", ".env")
         if os.path.exists(env_path):

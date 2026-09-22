@@ -17,12 +17,12 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Uptime tracker (client-side connection uptime for now)
+    // Uptime tracker (real server uptime synced via init_data)
     const uptimeDisplay = document.getElementById('uptime-display');
-    const connectTime = Date.now();
+    let serverStartTime = Date.now();
     if (uptimeDisplay) {
         setInterval(() => {
-            const diff = Math.floor((Date.now() - connectTime) / 1000);
+            const diff = Math.floor((Date.now() - serverStartTime) / 1000);
             const h = String(Math.floor(diff / 3600)).padStart(2, '0');
             const m = String(Math.floor((diff % 3600) / 60)).padStart(2, '0');
             const s = String(diff % 60).padStart(2, '0');
@@ -51,6 +51,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateModelsDropdown(data.data.llm_models);
             }
         } else if (data.type === 'init_data') {
+            if (data.data && data.data.server_start_time) {
+                serverStartTime = data.data.server_start_time;
+            }
+            if (data.data && data.data.llm_models) {
+                window.globalLlmModels = data.data.llm_models;
+            }
             if (data.data && data.data.llm_keys) {
                 globalLlmKeys = data.data.llm_keys;
             }
@@ -69,6 +75,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 tabs[source].chatMessages.innerHTML = '';
                 tabs[source].messages_array = [];
             }
+        } else if (data.type === 'harness_status') {
+            renderHarnessDashboard(source, data.plugins);
         } else {
             // Render generic system events as raw JSON blocks
             appendRawEvent(source, data);
@@ -775,6 +783,72 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function renderHarnessDashboard(source, plugins) {
+        const tab = tabs[source];
+        if (!tab) return;
+        
+        tab.logContainer.style.display = 'none';
+        
+        let dashboard = tab.content.querySelector('.harness-dashboard');
+        if (!dashboard) {
+            dashboard = document.createElement('div');
+            dashboard.className = 'harness-dashboard';
+            tab.content.appendChild(dashboard);
+        }
+        
+        dashboard.innerHTML = ''; // clear old cards
+        
+        plugins.forEach(plugin => {
+            const card = document.createElement('div');
+            card.className = 'harness-card';
+            if (plugin.name.includes('Reflex')) {
+                card.classList.add('reflex-card');
+            }
+            
+            const title = document.createElement('div');
+            title.className = 'harness-card-title';
+            title.textContent = plugin.name;
+            
+            const desc = document.createElement('div');
+            desc.className = 'harness-card-desc';
+            desc.textContent = plugin.description || 'Описание не задано';
+            
+            const statusRow = document.createElement('div');
+            statusRow.className = 'harness-card-status';
+            
+            const dot = document.createElement('span');
+            dot.className = 'status-dot ' + (plugin.status === 'alive' ? 'alive' : 'stopped');
+            
+            const txt = document.createElement('span');
+            if (plugin.status === 'alive') {
+                txt.className = 'status-text';
+                txt.dataset.checkTime = Date.now();
+                txt.textContent = `Alive (checked 0 sec ago)`;
+            } else {
+                txt.textContent = 'Stopped';
+            }
+            
+            statusRow.appendChild(dot);
+            statusRow.appendChild(txt);
+            
+            card.appendChild(title);
+            card.appendChild(desc);
+            card.appendChild(statusRow);
+            
+            dashboard.appendChild(card);
+        });
+    }
+
+    // Update "checked XX sec ago" timers
+    setInterval(() => {
+        document.querySelectorAll('.status-text').forEach(el => {
+            if (el.dataset.checkTime) {
+                const diff = Math.floor((Date.now() - parseInt(el.dataset.checkTime)) / 1000);
+                el.textContent = `Alive (checked ${diff} sec ago)`;
+            }
+        });
+    }, 1000);
+
 });
 
 
@@ -817,3 +891,4 @@ window.showRegistryModal = function() {
     document.getElementById('registry-json-content').textContent = JSON.stringify(reg, null, 2);
     modal.style.display = 'flex';
 };
+
