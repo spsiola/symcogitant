@@ -47,6 +47,9 @@ class TelegramPrivateDispatcher(BaseAgentPlugin):
                 session = self.sessions.get(chat_id)
                 if session:
                     await session.llm_resp_queue.put(event)
+        elif event_type == "models_restored":
+            for session in self.sessions.values():
+                session.wakeup_event.set()
 
     async def send_llm_request(self, req_id: str, chat_id: int, request_data: dict):
         self.pending_llm_requests[req_id] = chat_id

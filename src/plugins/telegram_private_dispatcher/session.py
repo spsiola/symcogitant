@@ -11,6 +11,7 @@ class PrivateDialogSession:
         
         self.incoming_queue = asyncio.Queue()
         self.llm_resp_queue = asyncio.Queue()
+        self.wakeup_event = asyncio.Event()
         
         self.timeout_sec = self.config.get("timeout_sec", 1000)
         self.window_size = self.config.get("window_size", 100)
@@ -86,67 +87,87 @@ class PrivateDialogSession:
                     if m.get("role") != "system":
                         context_msgs.append({"role": m["role"], "content": m["content"]})
                         
-                # Запрашиваем модель у диспетчера
-                model = self.dispatcher.get_llm_model({"chat_id": self.chat_id})
-                if not model:
-                    await self.dispatcher.emit_log(f"Session {self.chat_id}: no model available, pausing response.", "WARNING")
-                    await self.incoming_queue.put({"text": combined_text, "chat_id": self.chat_id})
-                    await asyncio.sleep(5) # Ждем перед повторной попыткой
-                    continue
+                while True:
+                    # Запрашиваем модель у диспетчера
+                    model_info = self.dispatcher.get_llm_model({"chat_id": self.chat_id})
+                    if not model_info:
+                        await self.dispatcher.emit_log(f"Session {self.chat_id}: no model available, pausing response.", "WARNING")
+                        await self.wakeup_event.wait()
+                        self.wakeup_event.clear()
+                        continue
 
-                req_id = f"tg_priv_{self.chat_id}_{int(time.time()*1000)}"
-                request_data = {
-                    "type": "llm_request",
-                    "request_id": req_id,
-                    "model": model,
-                    "messages": context_msgs
-                }
+                    model = model_info.get("model")
+                    api_key_name = model_info.get("api_key_name")
+
+                    req_id = f"tg_priv_{self.chat_id}_{int(time.time()*1000)}"
+                    request_data = {
+                        "type": "llm_request",
+                        "request_id": req_id,
+                        "model": model,
+                        "messages": context_msgs
+                    }
+                    if api_key_name:
+                        request_data["api_key_name"] = api_key_name
+                    
+                    # Отправляем запрос
+                    await self.dispatcher.emit_log(f"Session {self.chat_id}: sending llm_request {req_id}", "INFO")
                 
-                # Отправляем запрос
-                await self.dispatcher.emit_log(f"Session {self.chat_id}: sending llm_request {req_id}", "INFO")
-                
-                import random
-                # Задержка перед "прочитано"
-                await asyncio.sleep(random.uniform(1.0, 3.0))
-                await self.dispatcher.event_bus.publish({
-                    "type": "telegram_chat_action",
-                    "source": self.dispatcher.__class__.__name__,
-                    "chat_id": self.chat_id,
-                    "action": "read"
-                })
-                
-                await self.dispatcher.event_bus.publish({
-                    "type": "telegram_chat_action",
-                    "source": self.dispatcher.__class__.__name__,
-                    "chat_id": self.chat_id,
-                    "action": "typing"
-                })
-                
-                await self.dispatcher.send_llm_request(req_id, self.chat_id, request_data)
-                
-                # Ждем ответ. Lock не нужен, так как мы блокируем цикл while
-                # Следующие входящие сообщения от пользователя будут лежать в incoming_queue 
-                # и обработаются на следующей итерации (причем вместе, через внутренний while)
-                await self.dispatcher.emit_log(f"Session {self.chat_id}: waiting for llm_response...", "INFO")
-                llm_event = await self.llm_resp_queue.get()
-                await self.dispatcher.emit_log(f"Session {self.chat_id}: got llm_event: {llm_event.get('type')}", "INFO")
-                
-                if llm_event.get("type") == "llm_response":
-                    reply = llm_event.get("reply", "")
-                    if reply:
-                        if "[NO ANSWER]" in reply:
-                            await self.dispatcher.emit_log(f"Session {self.chat_id}: ignored message due to [NO ANSWER]", "INFO")
-                            await self.dispatcher.event_bus.publish({"type": "telegram_chat_action", "source": self.dispatcher.__class__.__name__, "chat_id": self.chat_id, "action": "cancel"})
-                        else:
-                            self._append_to_history({"role": "assistant", "content": reply})
-                            telegram_reply = reply + f"\n\n---\n🤖 `{model}`"
-                            await self.dispatcher.send_telegram_message(self.chat_id, telegram_reply)
-                            await self.dispatcher.emit_log(f"Session {self.chat_id}: sent reply to telegram", "INFO")
-                elif llm_event.get("type") == "llm_response_error":
-                    error = llm_event.get("error", "Unknown LLM error")
-                    self.dispatcher.report_llm_error(model, error)
-                    await self.dispatcher.send_telegram_message(self.chat_id, f"[System Error] {error}")
-                    await self.dispatcher.event_bus.publish({"type": "telegram_chat_action", "source": self.dispatcher.__class__.__name__, "chat_id": self.chat_id, "action": "cancel"})
+                    import random
+                    # Задержка перед "прочитано"
+                    await asyncio.sleep(random.uniform(1.0, 3.0))
+                    await self.dispatcher.event_bus.publish({
+                        "type": "telegram_chat_action",
+                        "source": self.dispatcher.__class__.__name__,
+                        "chat_id": self.chat_id,
+                        "action": "read"
+                    })
+                    
+                    await self.dispatcher.event_bus.publish({
+                        "type": "telegram_chat_action",
+                        "source": self.dispatcher.__class__.__name__,
+                        "chat_id": self.chat_id,
+                        "action": "typing"
+                    })
+                    
+                    await self.dispatcher.send_llm_request(req_id, self.chat_id, request_data)
+                    
+                    # Ждем ответ. Lock не нужен, так как мы блокируем цикл while
+                    # Следующие входящие сообщения от пользователя будут лежать в incoming_queue 
+                    # и обработаются на следующей итерации (причем вместе, через внутренний while)
+                    await self.dispatcher.emit_log(f"Session {self.chat_id}: waiting for llm_response...", "INFO")
+                    llm_event = await self.llm_resp_queue.get()
+                    if llm_event.get("request_id") != req_id:
+                        continue
+                    await self.dispatcher.emit_log(f"Session {self.chat_id}: got llm_event: {llm_event.get('type')}", "INFO")
+                    
+                    if llm_event.get("type") == "llm_response":
+                        reply = llm_event.get("reply", "")
+                        if reply:
+                            if "[NO ANSWER]" in reply:
+                                await self.dispatcher.emit_log(f"Session {self.chat_id}: ignored message due to [NO ANSWER]", "INFO")
+                                await self.dispatcher.event_bus.publish({"type": "telegram_chat_action", "source": self.dispatcher.__class__.__name__, "chat_id": self.chat_id, "action": "cancel"})
+                            else:
+                                self._append_to_history({"role": "assistant", "content": reply})
+                                key_suffix = f"#{llm_event.get('key_name')}" if llm_event.get('key_name') and llm_event.get('key_name') != "default" else ""
+                                actual_model = llm_event.get("response_model", model)
+                                provider = model.split("/")[0] if "/" in model else ""
+                                display_model = actual_model
+                                if provider and actual_model.startswith(f"{provider}/"):
+                                    display_model = actual_model[len(provider)+1:]
+                                signature_model = f"{provider}>{display_model}" if provider else display_model
+                                tokens = llm_event.get("usage", {}).get("total_tokens", 0)
+                                telegram_reply = reply + f"\n\n---\n🤖 `{signature_model}{key_suffix} [{tokens} tokens]`"
+                                await self.dispatcher.send_telegram_message(self.chat_id, telegram_reply)
+                                await self.dispatcher.emit_log(f"Session {self.chat_id}: sent reply to telegram", "INFO")
+                        break
+                    elif llm_event.get("type") == "llm_response_error":
+                        error = llm_event.get("error", "Unknown LLM error")
+                        self.dispatcher.report_llm_error(model, error)
+                        error_msg = f"[System Error] {error}\nПереключаюсь на другую модель..."
+                        self._append_to_history({"role": "assistant", "content": error_msg})
+                        await self.dispatcher.send_telegram_message(self.chat_id, error_msg)
+                        await self.dispatcher.event_bus.publish({"type": "telegram_chat_action", "source": self.dispatcher.__class__.__name__, "chat_id": self.chat_id, "action": "cancel"})
+                        continue
                     
         except asyncio.TimeoutError:
             # Сессия завершается по таймауту неактивности

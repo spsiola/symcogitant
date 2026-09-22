@@ -52,6 +52,8 @@ class LLMWorker(BaseWorker):
         """Resolves the API key from .env based on provider and optional name."""
         prefix = f"{provider_prefix.upper()}_API_KEY"
         if api_key_name and api_key_name != "default":
+            if api_key_name in self.api_keys:
+                return self.api_keys[api_key_name]
             key = self.api_keys.get(f"{prefix}_{api_key_name}")
             if key:
                 return key
@@ -349,6 +351,7 @@ class LLMWorker(BaseWorker):
                 "reply": reply_text,
                 "model": model,
                 "response_model": actual_response_model,
+                "key_name": event.get("api_key_name", "default"),
                 "timestamp": datetime.now(UTC).isoformat(),
                 "usage": {
                     "prompt_tokens": prompt_tokens,

@@ -59,7 +59,8 @@ workers:
           rules:
             - condition:
                 chat_id: [-510553680] # Важная рабочая группа
-              model: "openrouter/google/gemini-3.8-flash"
+              model: "atria/Atria-Dawn-Preview"
+              api_key_name: "symcogitant"  # Здесь указываешь суффикс
 
 interceptors:
   - module: "src.interceptors.security_interceptor.interceptor"

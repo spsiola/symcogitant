@@ -74,21 +74,21 @@ class BaseAgentPlugin(BasePlugin):
     Базовый класс для плагинов, которые используют LLM.
     Предоставляет методы для получения подходящей LLM от ModelSelectorWorker.
     """
-    def get_llm_model(self, context: dict) -> str | None:
+    def get_llm_model(self, context: dict) -> dict | None:
         if not self.core:
             return None
             
         selector = self.core.get_worker("ModelSelectorWorker")
         if selector:
-            model = selector.get_model(self.__class__.__name__, context)
-            if not model:
+            model_info = selector.get_model(self.__class__.__name__, context)
+            if not model_info:
                 self.status = "paused"
                 asyncio.create_task(self.emit_log(
                     f"No LLM model available for context {context}, pausing plugin.", level="WARNING"
                 ))
             else:
                 self.status = "alive"
-            return model
+            return model_info
         return None
 
     def report_llm_error(self, model: str, error: str):
