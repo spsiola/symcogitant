@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 from telethon import TelegramClient, events, utils
 from telethon.tl.types import UpdateMessageReactions, ReactionEmoji, ReactionCustomEmoji
 
-from src.core.plugin import BasePlugin
+from src.core.base import BasePlugin
 
 class MediaTelegramUserPlugin(BasePlugin):
     """
@@ -210,6 +210,11 @@ class MediaTelegramUserPlugin(BasePlugin):
 
     async def stop(self):
         self.running = False
+        
+        for task in list(self._typing_tasks.values()):
+            task.cancel()
+        self._typing_tasks.clear()
+            
         if self.client:
             await self.client.disconnect()
             

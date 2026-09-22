@@ -1,22 +1,9 @@
 core:
   watchdog_interval: 30
 
-plugins:
-  - module: "src.plugins.web_interface.plugin"
-    class: "WebInterfacePlugin"
-    enabled: true
-    config:
-      host: "127.0.0.1"
-      port: 4217
-
-  - module: "src.plugins.media_telegram_user.plugin"
-    class: "MediaTelegramUserPlugin"
-    enabled: true
-    config:
-      session_path: "data/telegram_user"
-
-  - module: "src.reflexes.system_monitor.reflex"
-    class: "SystemMonitorReflex"
+daemons:
+  - module: "src.daemons.system_monitor.daemon"
+    class: "SystemMonitorDaemon"
     enabled: true
     config:
       interval: 60
@@ -34,16 +21,35 @@ plugins:
         - "openrouter/z-ai/glm-5.3-flash"
         - "openrouter/deepseek/deepseek-v4.1-flash"
         - "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
-        
 
-  - module: "src.reflexes.llm_reflex.reflex"
-    class: "LLMReflex"
+workers:
+  - module: "src.workers.llm_worker.worker"
+    class: "LLMWorker"
     enabled: true
     config:
       base_url: "http://127.0.0.1:11434/v1"
       api_key: "ollama"
       default_model: "qwen2.5-coder:7b"
       num_ctx: 8192
+
+interceptors:
+
+mcp_servers:
+
+plugins:
+  - module: "src.plugins.web_interface.plugin"
+    class: "WebInterfacePlugin"
+    enabled: true
+    config:
+      host: "127.0.0.1"
+      port: 4217
+
+  - module: "src.plugins.media_telegram_user.plugin"
+    class: "MediaTelegramUserPlugin"
+    enabled: true
+    config:
+      session_path: "data/telegram_user"
+
 
   - module: "src.plugins.llm_chat.plugin"
     class: "LLMChatPlugin"

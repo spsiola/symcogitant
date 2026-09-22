@@ -1,6 +1,6 @@
 import asyncio
 from typing import Any, Dict
-from src.core.plugin import BasePlugin
+from src.core.base import BasePlugin
 from .session import PrivateDialogSession
 
 class TelegramPrivateDispatcher(BasePlugin):

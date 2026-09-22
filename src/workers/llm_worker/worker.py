@@ -9,10 +9,10 @@ from dotenv import dotenv_values
 from google import genai
 from openai import AsyncOpenAI
 
-from src.core.plugin import BasePlugin
+from src.core.base import BaseWorker
 
 
-class LLMReflex(BasePlugin):
+class LLMWorker(BaseWorker):
     """
     Рефлекс общения с LLM. Поддерживает OpenAI, Anthropic, Google Gemini, OpenRouter и локальные модели.
     """
@@ -44,13 +44,9 @@ class LLMReflex(BasePlugin):
         if google_api_key:
             self.gemini_client = genai.Client(api_key=google_api_key)
 
-    async def run(self):
+    async def on_start(self):
         self.event_bus.subscribe(self._handle_event)
-        await self.emit_log(f"LLM Reflex started. Default Base URL: {self.default_base_url}")
-        
-        self.running = True
-        while self.running:
-            await asyncio.sleep(1)
+        await self.emit_log(f"LLM Worker started. Default Base URL: {self.default_base_url}")
 
     def _resolve_api_key(self, provider_prefix: str, api_key_name: str | None = None) -> str:
         """Resolves the API key from .env based on provider and optional name."""

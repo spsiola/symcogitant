@@ -76,7 +76,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 tabs[source].messages_array = [];
             }
         } else if (data.type === 'harness_status') {
-            renderHarnessDashboard(source, data.plugins);
+            const allModules = [
+                ...(data.daemons || []),
+                ...(data.workers || []),
+                ...(data.interceptors || []),
+                ...(data.plugins || [])
+            ];
+            renderHarnessDashboard(source, allModules);
         } else {
             // Render generic system events as raw JSON blocks
             appendRawEvent(source, data);

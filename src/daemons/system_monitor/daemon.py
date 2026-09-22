@@ -9,10 +9,10 @@ import httpx
 import psutil
 from dotenv import dotenv_values
 
-from src.core.plugin import BasePlugin
+from src.core.base import BaseDaemon
 
 
-class SystemMonitorReflex(BasePlugin):
+class SystemMonitorDaemon(BaseDaemon):
     def __init__(self, config, event_bus, core=None):
         super().__init__(config, event_bus, core=core)
         self.description = "Сбор системных метрик и мониторинг доступности локальных нейросетей."
@@ -80,7 +80,7 @@ class SystemMonitorReflex(BasePlugin):
 
     async def run(self):
         self.event_bus.subscribe(self._handle_event)
-        await self.emit_log(f"SystemMonitorReflex started, metrics every {self.interval}s", "INFO")
+        await self.emit_log(f"SystemMonitorDaemon started, metrics every {self.interval}s", "INFO")
         
         self.running = True
         task_fast = asyncio.create_task(self._loop_fast())
@@ -147,7 +147,7 @@ class SystemMonitorReflex(BasePlugin):
 
                     metric_data = {
                         "type": "metric",
-                        "source": "SystemMonitorReflex",
+                        "source": "SystemMonitorDaemon",
                         "timestamp": time.time(),
                         "data": {
                             "cpu": {"cores": cpu_count, "usage_percent": cpu_percent},

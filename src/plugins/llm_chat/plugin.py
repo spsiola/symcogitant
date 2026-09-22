@@ -4,7 +4,7 @@ import os
 import time
 from typing import Any, Dict
 
-from src.core.plugin import BasePlugin
+from src.core.base import BasePlugin
 
 class LLMChatPlugin(BasePlugin):
     """

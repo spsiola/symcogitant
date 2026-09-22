@@ -6,7 +6,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from src.core.plugin import BasePlugin
+from src.core.base import BasePlugin
 
 
 class WebInterfacePlugin(BasePlugin):
@@ -40,7 +40,7 @@ class WebInterfacePlugin(BasePlugin):
                 "server_start_time": self.start_time * 1000 if self.start_time else None
             }
             if self.core:
-                sys_monitor = self.core.get_plugin("SystemMonitorReflex")
+                sys_monitor = self.core.get_daemon("SystemMonitorDaemon")
                 if sys_monitor:
                     try:
                         models = sys_monitor.get_models()

@@ -6,7 +6,7 @@ import signal
 import yaml
 
 from src.core.event_bus import EventBus
-from src.core.plugin import BasePlugin
+from src.core.base import BaseModule, BasePlugin, BaseDaemon, BaseWorker, BaseInterceptor
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("Symcogitant")
@@ -15,30 +15,48 @@ class SymcogitantCore:
     def __init__(self, config_path: str = "config.yaml"):
         self.config_path = config_path
         self.event_bus = EventBus()
-        self.plugins: list[BasePlugin] = []
         self._stop_event = asyncio.Event()
+        
+        self.plugins: list[BasePlugin] = []
+        self.daemons: list[BaseDaemon] = []
+        self.workers: list[BaseWorker] = []
+        self.interceptors: list[BaseInterceptor] = []
+        self.all_modules: list[BaseModule] = []
 
     def load_config(self) -> dict:
         with open(self.config_path, 'r', encoding='utf-8') as f:
             return yaml.safe_load(f)
 
-    def get_plugin(self, name: str) -> BasePlugin | None:
-        for p in self.plugins:
-            if p.__class__.__name__ == name:
-                return p
+    def get_module(self, name: str) -> BaseModule | None:
+        for m in self.all_modules:
+            if m.__class__.__name__ == name:
+                return m
         return None
 
-    def _load_plugin(self, plugin_config: dict) -> BasePlugin | None:
+    def get_plugin(self, name: str) -> BasePlugin | None:
+        return self.get_module(name)
+
+    def get_daemon(self, name: str) -> BaseDaemon | None:
+        return self.get_module(name)
+
+    def get_worker(self, name: str) -> BaseWorker | None:
+        return self.get_module(name)
+
+    def _load_module(self, config: dict, expected_type: type) -> BaseModule | None:
         try:
-            module_name = plugin_config['module']
-            class_name = plugin_config['class']
+            module_name = config['module']
+            class_name = config['class']
             
             module = importlib.import_module(module_name)
-            plugin_class = getattr(module, class_name)
+            module_class = getattr(module, class_name)
             
-            return plugin_class(plugin_config.get('config', {}), self.event_bus, core=self)
+            if not issubclass(module_class, expected_type):
+                logger.error(f"Class {class_name} is not a subclass of {expected_type.__name__}")
+                return None
+            
+            return module_class(config.get('config', {}), self.event_bus, core=self)
         except Exception as e:
-            logger.error(f"Failed to load plugin {plugin_config.get('class', 'Unknown')}: {e}")
+            logger.error(f"Failed to load module {config.get('class', 'Unknown')}: {e}")
             return None
 
     async def _log_subscriber(self, event: dict):
@@ -52,57 +70,60 @@ class SymcogitantCore:
             else:
                 logger.info(msg)
 
+    async def _start_modules(self, module_list: list, config_list: list | None, expected_type: type, category_name: str):
+        if config_list is None:
+            return
+        for cfg in config_list:
+            if cfg.get('enabled', True):
+                logger.info(f"Loading {category_name}: {cfg['class']}")
+                module_instance = self._load_module(cfg, expected_type)
+                if module_instance:
+                    module_list.append(module_instance)
+                    self.all_modules.append(module_instance)
+                    try:
+                        await module_instance.start()
+                    except Exception as e:
+                        logger.error(f"Failed to start {category_name} {cfg['class']}: {e}")
+
     async def start(self):
         config = self.load_config()
         self.event_bus.subscribe(self._log_subscriber)
 
-        # Инициализация и запуск плагинов
-        for p_cfg in config.get('plugins', []):
-            if p_cfg.get('enabled', True):
-                logger.info(f"Loading plugin: {p_cfg['class']}")
-                plugin = self._load_plugin(p_cfg)
-                if plugin:
-                    self.plugins.append(plugin)
-                    try:
-                        await plugin.start()
-                    except Exception as e:
-                        logger.error(f"Failed to start plugin {p_cfg['class']}: {e}")
+        # Initialization
+        await self._start_modules(self.daemons, config.get('daemons', []), BaseDaemon, "daemon")
+        await self._start_modules(self.workers, config.get('workers', []), BaseWorker, "worker")
+        await self._start_modules(self.interceptors, config.get('interceptors', []), BaseInterceptor, "interceptor")
+        await self._start_modules(self.plugins, config.get('plugins', []), BasePlugin, "plugin")
 
         logger.info("Symcogitant started. Press Ctrl+C to stop.")
         
-        # Настройка обработчиков сигналов для корректного завершения
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, self._stop_event.set)
 
-        # Главный цикл (watchdog)
         watchdog_interval = config.get("core", {}).get("watchdog_interval", 30)
-        logger.info(f"Watchdog started. Polling plugins every {watchdog_interval} seconds.")
+        logger.info(f"Watchdog started. Polling every {watchdog_interval} seconds.")
         
         while not self._stop_event.is_set():
             try:
-                # Ждем события остановки с таймаутом
                 await asyncio.wait_for(self._stop_event.wait(), timeout=watchdog_interval)
             except asyncio.TimeoutError:
-                # Таймаут сработал — опрашиваем плагины
-                plugin_statuses = []
-                for plugin in self.plugins:
-                    status_info = plugin.get_status()
-                    plugin_statuses.append(status_info)
-                    
-                # Отправляем единое событие статуса системы
-                asyncio.create_task(self.event_bus.publish({
+                harness_status = {
                     "type": "harness_status",
                     "source": "harness core",
-                    "plugins": plugin_statuses
-                }))
+                    "daemons": [m.get_status() for m in self.daemons],
+                    "workers": [m.get_status() for m in self.workers],
+                    "interceptors": [m.get_status() for m in self.interceptors],
+                    "plugins": [m.get_status() for m in self.plugins],
+                }
+                asyncio.create_task(self.event_bus.publish(harness_status))
         
         logger.info("Shutting down...")
         await self.stop()
 
     async def stop(self):
-        for plugin in self.plugins:
-            await plugin.stop()
+        for module in self.all_modules:
+            await module.stop()
         logger.info("Shutdown complete.")
 
 def main():

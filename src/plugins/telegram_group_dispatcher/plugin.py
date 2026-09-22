@@ -1,7 +1,7 @@
 import asyncio
 import re
 from typing import Any, Dict
-from src.core.plugin import BasePlugin
+from src.core.base import BasePlugin
 from .session import GroupDialogSession
 
 class TelegramGroupDispatcher(BasePlugin):
