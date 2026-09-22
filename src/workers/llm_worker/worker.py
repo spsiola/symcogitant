@@ -76,6 +76,7 @@ class LLMWorker(BaseWorker):
         messages = event.get("messages", [])
         model = event.get("model", self.default_model)
         temperature = event.get("temperature", 0.7)
+        tools = event.get("tools", None)
         
         if not messages:
             await self.emit_log("Received llm_request without messages.", level="WARNING")
@@ -97,13 +98,26 @@ class LLMWorker(BaseWorker):
                 system_prompt = next((m["content"] for m in messages if m["role"] == "system"), "")
                 user_msgs = [{"role": m["role"], "content": str(m.get("content", ""))} for m in messages if m["role"] != "system"]
                 
-                response = await self.anthropic_client.messages.create(
-                    model=actual_model,
-                    system=system_prompt,
-                    messages=user_msgs,
-                    max_tokens=4096,
-                    temperature=temperature
-                )
+                create_kwargs = {
+                    "model": actual_model,
+                    "system": system_prompt,
+                    "messages": user_msgs,
+                    "max_tokens": 4096,
+                    "temperature": temperature
+                }
+                
+                if tools:
+                    anthropic_tools = [
+                        {
+                            "name": t["function"]["name"],
+                            "description": t["function"].get("description", ""),
+                            "input_schema": t["function"]["parameters"]
+                        }
+                        for t in tools if t.get("type") == "function"
+                    ]
+                    create_kwargs["tools"] = anthropic_tools
+                
+                response = await self.anthropic_client.messages.create(**create_kwargs)
                 reply_text = response.content[0].text
                 prompt_tokens = response.usage.input_tokens
                 completion_tokens = response.usage.output_tokens
@@ -128,6 +142,10 @@ class LLMWorker(BaseWorker):
                 if system_instruction:
                     config_kwargs["system_instruction"] = system_instruction
                 
+                if tools:
+                    gemini_tools = [{"function_declarations": [t["function"] for t in tools if t.get("type") == "function"]}]
+                    config_kwargs["tools"] = gemini_tools
+                
                 response = await self.gemini_client.aio.models.generate_content(
                     model=actual_model,
                     contents=formatted_msgs,
@@ -151,11 +169,16 @@ class LLMWorker(BaseWorker):
                     api_key=api_key
                 )
                 formatted_msgs = [{"role": m["role"], "content": str(m.get("content", ""))} for m in messages]
-                response = await or_client.chat.completions.create(
-                    model=actual_model,
-                    messages=formatted_msgs,
-                    temperature=temperature,
-                )
+                
+                create_kwargs = {
+                    "model": actual_model,
+                    "messages": formatted_msgs,
+                    "temperature": temperature
+                }
+                if tools:
+                    create_kwargs["tools"] = tools
+                    
+                response = await or_client.chat.completions.create(**create_kwargs)
 
             elif model.startswith("openai/"):
                 actual_model = model.replace("openai/", "")
@@ -167,11 +190,16 @@ class LLMWorker(BaseWorker):
                     api_key=api_key
                 )
                 formatted_msgs = [{"role": m["role"], "content": str(m.get("content", ""))} for m in messages]
-                response = await openai_client.chat.completions.create(
-                    model=actual_model,
-                    messages=formatted_msgs,
-                    temperature=temperature,
-                )
+                
+                create_kwargs = {
+                    "model": actual_model,
+                    "messages": formatted_msgs,
+                    "temperature": temperature
+                }
+                if tools:
+                    create_kwargs["tools"] = tools
+                    
+                response = await openai_client.chat.completions.create(**create_kwargs)
 
             elif model.startswith("atria/"):
                 actual_model = model.replace("atria/", "")
@@ -185,11 +213,16 @@ class LLMWorker(BaseWorker):
                     api_key=api_key
                 )
                 formatted_msgs = [{"role": m["role"], "content": str(m.get("content", ""))} for m in messages]
-                response = await atria_client.chat.completions.create(
-                    model=actual_model,
-                    messages=formatted_msgs,
-                    temperature=temperature,
-                )
+                
+                create_kwargs = {
+                    "model": actual_model,
+                    "messages": formatted_msgs,
+                    "temperature": temperature
+                }
+                if tools:
+                    create_kwargs["tools"] = tools
+                    
+                response = await atria_client.chat.completions.create(**create_kwargs)
 
             else:
                 # Default / Local model
@@ -200,14 +233,36 @@ class LLMWorker(BaseWorker):
                 if num_ctx:
                     extra_body["options"] = {"num_ctx": int(num_ctx)}
                 
-                response = await self.local_client.chat.completions.create(
-                    model=model,
-                    messages=formatted_msgs,
-                    temperature=temperature,
-                    extra_body=extra_body if extra_body else None
-                )
+                create_kwargs = {
+                    "model": model,
+                    "messages": formatted_msgs,
+                    "temperature": temperature,
+                    "extra_body": extra_body if extra_body else None
+                }
+                if tools:
+                    create_kwargs["tools"] = tools
+                    
+                response = await self.local_client.chat.completions.create(**create_kwargs)
 
-            reply_text = response.choices[0].message.content if hasattr(response, "choices") and response.choices else ""
+            tool_calls = []
+            if hasattr(response, "choices") and response.choices:
+                msg = response.choices[0].message
+                reply_text = msg.content or ""
+                if hasattr(msg, "tool_calls") and msg.tool_calls:
+                    for tc in msg.tool_calls:
+                        tool_calls.append({
+                            "id": tc.id,
+                            "type": tc.type,
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments
+                            }
+                        })
+            elif model.startswith("anthropic/") or model.startswith("google/"):
+                # reply_text already set above for these
+                pass
+            else:
+                reply_text = ""
             
             prompt_tokens = 0
             completion_tokens = 0
@@ -295,7 +350,8 @@ class LLMWorker(BaseWorker):
                     "completion_tokens": completion_tokens,
                     "total_tokens": total_tokens
                 },
-                "latency_sec": latency
+                "latency_sec": latency,
+                "tool_calls": tool_calls
             })
             
         except Exception as e:  # noqa: BLE001

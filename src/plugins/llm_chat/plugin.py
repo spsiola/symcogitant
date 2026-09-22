@@ -53,6 +53,16 @@ class LLMChatPlugin(BasePlugin):
             "message": f"Плагин запущен. История загружена ({len(self.messages)} сообщений)."
         })
         
+        if hasattr(self.core, "tools_registry") and self.core.tools_registry:
+            tools_schema = self.core.tools_registry.get_tools_schema()
+            if tools_schema:
+                tool_names = [t["function"]["name"] for t in tools_schema if t.get("type") == "function"]
+                await self.event_bus.publish({
+                    "type": "ui_chat_system",
+                    "source": self.__class__.__name__,
+                    "message": f"Доступные инструменты (tools): {', '.join(tool_names)}"
+                })
+        
         # Загружаем предыдущие сообщения в UI (включая системный промпт)
         for msg in self.messages:
             event_data = {
@@ -87,6 +97,7 @@ class LLMChatPlugin(BasePlugin):
                 
             self.messages.append({"role": "user", "content": user_text})
             self._save_history()
+            self.tool_iteration_count = 0
             
             # Отправляем системное уведомление в чат, что запрос ушел
             await self.event_bus.publish({
@@ -104,10 +115,19 @@ class LLMChatPlugin(BasePlugin):
             }
             if event.get("model"):
                 request_data["model"] = event.get("model")
+                self.last_llm_model = event.get("model")
             if event.get("num_ctx"):
                 request_data["num_ctx"] = event.get("num_ctx")
+                self.last_num_ctx = event.get("num_ctx")
             if event.get("api_key_name"):
                 request_data["api_key_name"] = event.get("api_key_name")
+                self.last_api_key_name = event.get("api_key_name")
+            
+            # Прокидываем все инструменты, если реестр доступен
+            if hasattr(self.core, "tools_registry") and self.core.tools_registry:
+                tools_schema = self.core.tools_registry.get_tools_schema()
+                if tools_schema:
+                    request_data["tools"] = tools_schema
                 
             await self.event_bus.publish(request_data)
             
@@ -153,22 +173,25 @@ class LLMChatPlugin(BasePlugin):
         elif event.get("type") == "llm_response" and event.get("request_id") == getattr(self, "last_request_id", None):
             # Получен ответ от LLM
             reply = event.get("reply", "")
+            tool_calls = event.get("tool_calls", [])
+            ui_reply = reply
+            if tool_calls:
+                ui_reply += "\n\n🛠 **Вызовы инструментов (Tool Calls):**\n```json\n" + json.dumps(tool_calls, indent=2, ensure_ascii=False) + "\n```"
+            
+            # Save params for recursive calls
+            self.last_llm_model = event.get("model")
+            
             usage = event.get("usage", {})
             latency = event.get("latency_sec", 0)
             model_name = event.get("model", "unknown")
             timestamp = event.get("timestamp", "")
             
-            # Сохраняем расширенные данные
-            self.messages.append({
-                "role": "assistant", 
-                "content": reply,
-                "metadata": {
-                    "model": model_name,
-                    "timestamp": timestamp,
-                    "latency_sec": latency,
-                    "usage": usage
-                }
-            })
+            # Сохраняем ответ ассистента в историю (для API важно передавать чистые tool_calls)
+            assistant_msg = {"role": "assistant", "content": reply}
+            if tool_calls:
+                assistant_msg["tool_calls"] = tool_calls
+            
+            self.messages.append(assistant_msg)
             self._save_history()
             
             # Отправляем ответ в UI
@@ -176,7 +199,7 @@ class LLMChatPlugin(BasePlugin):
                 "type": "ui_chat_output",
                 "source": self.__class__.__name__,
                 "role": "assistant",
-                "content": reply,
+                "content": ui_reply,
                 "metadata": {
                     "model": model_name,
                     "timestamp": timestamp,
@@ -198,6 +221,81 @@ class LLMChatPlugin(BasePlugin):
                 "source": self.__class__.__name__,
                 "message": stats_msg
             })
+
+            if tool_calls:
+                max_iters = self.config.get("max_tool_iterations", 3)
+                if getattr(self, "tool_iteration_count", 0) >= max_iters:
+                    await self.event_bus.publish({
+                        "type": "ui_chat_system",
+                        "source": self.__class__.__name__,
+                        "message": f"⚠️ Достигнут лимит вызовов инструментов ({max_iters}). Остановка цепочки."
+                    })
+                else:
+                    # Запрашиваем выполнение инструментов
+                    req_id = f"tool_{int(time.time()*1000)}"
+                    self.last_tool_request_id = req_id
+                    await self.event_bus.publish({
+                        "type": "tool_execution_request",
+                        "request_id": req_id,
+                        "tool_calls": tool_calls
+                    })
+
+        elif event.get("type") == "tool_execution_response" and event.get("request_id") == getattr(self, "last_tool_request_id", None):
+            if event.get("error"):
+                await self.event_bus.publish({
+                    "type": "ui_chat_system",
+                    "source": self.__class__.__name__,
+                    "message": f"⚠️ Ошибка при выполнении инструментов: {event['error']}"
+                })
+                return
+                
+            results = event.get("results", [])
+            for res in results:
+                tool_msg = {
+                    "role": "tool",
+                    "tool_call_id": res.get("tool_call_id"),
+                    "name": res.get("name"),
+                    "content": res.get("content")
+                }
+                self.messages.append(tool_msg)
+                # Broadcast tool result to UI so it stays in sync
+                await self.event_bus.publish({
+                    "type": "ui_chat_output",
+                    "source": self.__class__.__name__,
+                    "role": "tool",
+                    "content": f"**Tool `{tool_msg['name']}` result:**\n```json\n{tool_msg['content']}\n```"
+                })
+            self._save_history()
+            
+            self.tool_iteration_count = getattr(self, "tool_iteration_count", 0) + 1
+            
+            # Отправляем новый запрос в LLM с добавленными результатами
+            await self.event_bus.publish({
+                "type": "ui_chat_system",
+                "source": self.__class__.__name__,
+                "message": "Результаты инструментов получены. Возврат в LLM..."
+            })
+            
+            req_id = f"chat_{int(time.time()*1000)}"
+            request_data = {
+                "type": "llm_request",
+                "request_id": req_id,
+                "messages": self.messages.copy()
+            }
+            if getattr(self, "last_llm_model", None):
+                request_data["model"] = self.last_llm_model
+            if getattr(self, "last_api_key_name", None):
+                request_data["api_key_name"] = self.last_api_key_name
+            if getattr(self, "last_num_ctx", None):
+                request_data["num_ctx"] = self.last_num_ctx
+
+            if hasattr(self.core, "tools_registry") and self.core.tools_registry:
+                tools_schema = self.core.tools_registry.get_tools_schema()
+                if tools_schema:
+                    request_data["tools"] = tools_schema
+                    
+            await self.event_bus.publish(request_data)
+            self.last_request_id = req_id
 
         elif event.get("type") == "llm_response_error" and event.get("request_id") == getattr(self, "last_request_id", None):
             error_msg = event.get("error", "Unknown error")

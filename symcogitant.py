@@ -7,13 +7,24 @@ import yaml
 
 from src.core.event_bus import EventBus
 from src.core.base import BaseModule, BasePlugin, BaseDaemon, BaseWorker, BaseInterceptor
+from src.core.tools import ToolsRegistry
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("Symcogitant")
 
+import tomllib
+import os
+
+try:
+    with open(os.path.join(os.path.dirname(__file__), "pyproject.toml"), "rb") as f:
+        VERSION = tomllib.load(f)["project"]["version"]
+except Exception:
+    VERSION = "0.2.0"
+
 class SymcogitantCore:
     def __init__(self, config_path: str = "config.yaml"):
         self.config_path = config_path
+        self.version = VERSION
         self.event_bus = EventBus()
         self._stop_event = asyncio.Event()
         
@@ -22,6 +33,7 @@ class SymcogitantCore:
         self.workers: list[BaseWorker] = []
         self.interceptors: list[BaseInterceptor] = []
         self.all_modules: list[BaseModule] = []
+        self.tools_registry = ToolsRegistry(core=self)
 
     def load_config(self) -> dict:
         with open(self.config_path, 'r', encoding='utf-8') as f:
@@ -88,6 +100,10 @@ class SymcogitantCore:
     async def start(self):
         config = self.load_config()
         self.event_bus.subscribe(self._log_subscriber)
+
+        # Load tools
+        self.tools_registry.load_from_directory("src/tools")
+        self.tools_registry.load_from_directory("data/tools")
 
         # Initialization
         await self._start_modules(self.daemons, config.get('daemons', []), BaseDaemon, "daemon")

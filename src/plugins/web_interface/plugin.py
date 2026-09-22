@@ -37,7 +37,8 @@ class WebInterfacePlugin(BasePlugin):
             
             # Direct query to SystemMonitorReflex for instant model list
             init_data_payload = {
-                "server_start_time": self.start_time * 1000 if self.start_time else None
+                "server_start_time": self.start_time * 1000 if self.start_time else None,
+                "server_version": getattr(self.core, "version", "unknown") if self.core else "unknown"
             }
             if self.core:
                 sys_monitor = self.core.get_daemon("SystemMonitorDaemon")

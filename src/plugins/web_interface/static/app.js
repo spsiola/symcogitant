@@ -54,6 +54,12 @@ document.addEventListener('DOMContentLoaded', () => {
             if (data.data && data.data.server_start_time) {
                 serverStartTime = data.data.server_start_time;
             }
+            if (data.data && data.data.server_version) {
+                const versionDisplay = document.getElementById('version-display');
+                if (versionDisplay) {
+                    versionDisplay.textContent = 'v' + data.data.server_version;
+                }
+            }
             if (data.data && data.data.llm_models) {
                 window.globalLlmModels = data.data.llm_models;
             }

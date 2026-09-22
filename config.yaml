@@ -23,6 +23,11 @@ daemons:
         - "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
 
 workers:
+  - module: "src.workers.tool_worker.worker"
+    class: "ToolWorker"
+    enabled: true
+    config: {}
+
   - module: "src.workers.llm_worker.worker"
     class: "LLMWorker"
     enabled: true
@@ -33,6 +38,10 @@ workers:
       num_ctx: 8192
 
 interceptors:
+  - module: "src.interceptors.security_interceptor.interceptor"
+    class: "SecurityInterceptor"
+    enabled: true
+    config: {}
 
 mcp_servers:
 
@@ -54,7 +63,8 @@ plugins:
   - module: "src.plugins.llm_chat.plugin"
     class: "LLMChatPlugin"
     enabled: true
-    config: {}
+    config:
+      max_tool_iterations: 3
 
   - module: "src.plugins.telegram_private_dispatcher.plugin"
     class: "TelegramPrivateDispatcher"
