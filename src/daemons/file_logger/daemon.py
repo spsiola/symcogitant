@@ -3,10 +3,11 @@ import os
 import datetime
 import json
 import aiofiles
+from typing import Any
 from src.core.base import BaseDaemon
 
 class FileLoggerDaemon(BaseDaemon):
-    def __init__(self, config: dict, event_bus: any, core: any = None):
+    def __init__(self, config: dict, event_bus: Any, core: Any = None):
         super().__init__(config, event_bus, core)
         self.description = "Фоновый логгер событий в файлы с дневной ротацией"
         self.queue = asyncio.Queue()
