@@ -22,6 +22,12 @@ daemons:
         - "openrouter/deepseek/deepseek-v4.1-flash"
         - "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
 
+  - module: "src.daemons.file_logger.daemon"
+    class: "FileLoggerDaemon"
+    enabled: true
+    config:
+      ignored_types: ["harness_status", "metric"]
+
   - module: "src.daemons.mcp_manager.daemon"
     class: "MCPManagerDaemon"
     enabled: true

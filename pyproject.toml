@@ -1,6 +1,6 @@
 [project]
 name = "symcogitant"
-version = "0.4.1"
+version = "0.5.0"
 description = "Add your description here"
 readme = "README.md"
 authors = [
@@ -8,6 +8,7 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
+    "aiofiles>=25.1.0",
     "anthropic>=1.7.0",
     "fastapi>=0.141.1",
     "google-genai>=2.24.0",

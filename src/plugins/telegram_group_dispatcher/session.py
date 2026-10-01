@@ -78,10 +78,18 @@ class GroupDialogSession:
              
         return bool(re.search(r'\b(зеленый|зелёный|ии)\b', text_lower))
 
+    async def emit_log(self, message: str, level: str = "INFO"):
+        await self.dispatcher.event_bus.publish({
+            "type": "log",
+            "source": f"TelegramGroup_{self.chat_id}",
+            "level": level,
+            "message": message
+        })
+
     async def run(self):
         try:
             while True:
-                await self.dispatcher.emit_log(f"GroupSession {self.chat_id}: waiting for messages...", "INFO")
+                await self.emit_log("waiting for messages...", "INFO")
                 msg_event = await asyncio.wait_for(self.incoming_queue.get(), timeout=self.timeout_sec)
                 
                 # Собираем все сообщения из очереди
@@ -106,7 +114,7 @@ class GroupDialogSession:
                     continue
                     
                 # Если сработал триггер, начинаем цикл обработки ответа
-                await self.dispatcher.emit_log(f"GroupSession {self.chat_id}: Trigger word detected!", "INFO")
+                await self.emit_log("Trigger word detected!", "INFO")
                 
                 # Задержка 2-4 секунды перед send_read_acknowledge
                 await asyncio.sleep(random.uniform(2.0, 4.0))
@@ -139,7 +147,7 @@ class GroupDialogSession:
                     # Запрашиваем модель у диспетчера
                     model_info = self.dispatcher.get_llm_model({"chat_id": self.chat_id})
                     if not model_info:
-                        await self.dispatcher.emit_log(f"Session {self.chat_id}: no model available, pausing response.", "WARNING")
+                        await self.emit_log("no model available, pausing response.", "WARNING")
                         await self.wakeup_event.wait()
                         self.wakeup_event.clear()
                         continue
@@ -157,10 +165,10 @@ class GroupDialogSession:
                     if api_key_name:
                         request_data["api_key_name"] = api_key_name
                     
-                    await self.dispatcher.emit_log(f"GroupSession {self.chat_id}: sending llm_request {req_id}", "INFO")
+                    await self.emit_log(f"sending llm_request {req_id}", "INFO")
                     await self.dispatcher.send_llm_request(req_id, self.chat_id, request_data)
                     
-                    await self.dispatcher.emit_log(f"GroupSession {self.chat_id}: waiting for llm_response...", "INFO")
+                    await self.emit_log("waiting for llm_response...", "INFO")
                     llm_event = await self.llm_resp_queue.get()
                     if llm_event.get("request_id") != req_id:
                         continue
@@ -169,7 +177,7 @@ class GroupDialogSession:
                         reply = llm_event.get("reply", "")
                         if reply:
                             if "[NO ANSWER]" in reply:
-                                await self.dispatcher.emit_log(f"GroupSession {self.chat_id}: ignored message due to [NO ANSWER]", "INFO")
+                                await self.emit_log("ignored message due to [NO ANSWER]", "INFO")
                                 await self.dispatcher.event_bus.publish({"type": "telegram_chat_action", "source": self.dispatcher.__class__.__name__, "chat_id": self.chat_id, "action": "cancel"})
                             else:
                                 self._append_to_history({"role": "assistant", "content": reply})
@@ -183,7 +191,7 @@ class GroupDialogSession:
                                 tokens = llm_event.get("usage", {}).get("total_tokens", 0)
                                 telegram_reply = reply + f"\n\n---\n🤖 `{signature_model}{key_suffix} [{tokens} tokens]`"
                                 await self.dispatcher.send_telegram_message(self.chat_id, telegram_reply)
-                                await self.dispatcher.emit_log(f"GroupSession {self.chat_id}: sent reply", "INFO")
+                                await self.emit_log("sent reply", "INFO")
                         break
                     elif llm_event.get("type") == "llm_response_error":
                         error = llm_event.get("error", "Unknown LLM error")
@@ -195,11 +203,11 @@ class GroupDialogSession:
                         continue
                     
         except asyncio.TimeoutError:
-            await self.dispatcher.emit_log(f"GroupSession {self.chat_id} timed out.", "INFO")
+            await self.emit_log("timed out.", "INFO")
             await self.dispatcher.event_bus.publish({"type": "telegram_chat_action", "source": self.dispatcher.__class__.__name__, "chat_id": self.chat_id, "action": "cancel"})
             await self.dispatcher.close_session(self.chat_id)
         except Exception as e:
             import traceback
             err = traceback.format_exc()
-            await self.dispatcher.emit_log(f"GroupSession {self.chat_id} crashed: {e}\n{err}", "ERROR")
+            await self.emit_log(f"crashed: {e}\n{err}", "ERROR")
             await self.dispatcher.close_session(self.chat_id)

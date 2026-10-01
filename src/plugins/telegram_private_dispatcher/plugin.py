@@ -35,7 +35,12 @@ class TelegramPrivateDispatcher(BaseAgentPlugin):
                     session = PrivateDialogSession(chat_id, self, self.config)
                     self.sessions[chat_id] = session
                     asyncio.create_task(session.run())
-                    await self.emit_log(f"Created new private session for chat {chat_id}", "INFO")
+                    await self.event_bus.publish({
+                        "type": "log",
+                        "source": f"TelegramPrivate_{chat_id}",
+                        "level": "INFO",
+                        "message": f"Created new private session for chat {chat_id}"
+                    })
                     
                 session = self.sessions[chat_id]
                 await session.incoming_queue.put(event)
@@ -66,4 +71,9 @@ class TelegramPrivateDispatcher(BaseAgentPlugin):
     async def close_session(self, chat_id: int):
         if chat_id in self.sessions:
             del self.sessions[chat_id]
-            await self.emit_log(f"Closed private session for chat {chat_id} due to timeout or error", "INFO")
+            await self.event_bus.publish({
+                "type": "log",
+                "source": f"TelegramPrivate_{chat_id}",
+                "level": "INFO",
+                "message": f"Closed private session for chat {chat_id} due to timeout or error"
+            })
