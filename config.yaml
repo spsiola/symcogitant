@@ -53,20 +53,16 @@ workers:
     enabled: true
     config:
       routing:
-        TelegramPrivateDispatcher:
+        TalksManagerPlugin:
           default_model: "qwen2.5-coder:7b"
           rules:
             - condition:
-                chat_id: [428611700, 1380935931] # Доверенные контакты
+                talk_id_prefix: "tg:priv:"
               model: "openrouter/anthropic/claude-opus-5"
-            
-        TelegramGroupDispatcher:
-          default_model: "qwen2.5-coder:7b"
-          rules:
             - condition:
-                chat_id: [-510553680] # Важная рабочая группа
+                talk_id_prefix: "tg:group:-510553680" # Важная рабочая группа
               model: "atria/Atria-Dawn-Preview"
-              api_key_name: "symcogitant"  # Здесь указываешь суффикс
+              api_key_name: "symcogitant"
 
 interceptors:
   - module: "src.interceptors.security_interceptor.interceptor"
@@ -88,12 +84,11 @@ plugins:
       host: "127.0.0.1"
       port: 4217
 
-  - module: "src.plugins.media_telegram_user.plugin"
-    class: "MediaTelegramUserPlugin"
+  - module: "src.plugins.telegram_transport.plugin"
+    class: "TelegramTransportPlugin"
     enabled: true
     config:
       session_path: "data/telegram_user"
-
 
   - module: "src.plugins.llm_chat.plugin"
     class: "LLMChatPlugin"
@@ -101,19 +96,7 @@ plugins:
     config:
       max_tool_iterations: 3
 
-  - module: "src.plugins.telegram_private_dispatcher.plugin"
-    class: "TelegramPrivateDispatcher"
+  - module: "src.plugins.talks_manager.plugin"
+    class: "TalksManagerPlugin"
     enabled: true
-    config:
-      timeout_sec: 1000
-      default_model: "hf.co/unsloth/rnj-1-instruct-GGUF:Q4_K_M"
-      window_size: 100
-
-  - module: "src.plugins.telegram_group_dispatcher.plugin"
-    class: "TelegramGroupDispatcher"
-    enabled: true
-    config:
-      telegram_group_dispatcher:
-        session_timeout_seconds: 1000
-        max_context_messages: 100
-        default_model: "hf.co/unsloth/rnj-1-instruct-GGUF:Q4_K_M"
+    config: {}
