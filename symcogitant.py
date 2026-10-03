@@ -10,7 +10,26 @@ from src.core.event_bus import EventBus
 from src.core.base import BaseModule, BasePlugin, BaseDaemon, BaseWorker, BaseInterceptor
 from src.core.tools import ToolsRegistry
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+class ColorFormatter(logging.Formatter):
+    COLORS = {
+        'WARNING': '\033[33m',    # Yellow
+        'ERROR': '\033[31m',      # Red
+        'CRITICAL': '\033[31;1m', # Bold Red
+    }
+    RESET = '\033[0m'
+
+    def format(self, record):
+        log_fmt = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        color = self.COLORS.get(record.levelname, '')
+        if color:
+            formatter = logging.Formatter(f"{color}{log_fmt}{self.RESET}")
+        else:
+            formatter = logging.Formatter(log_fmt)
+        return formatter.format(record)
+
+handler = logging.StreamHandler()
+handler.setFormatter(ColorFormatter())
+logging.basicConfig(level=logging.INFO, handlers=[handler])
 logger = logging.getLogger("Symcogitant")
 
 import tomllib

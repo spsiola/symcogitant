@@ -64,6 +64,11 @@ workers:
           - "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
           - "qwen2.5-coder:7b"
 
+  - module: "src.workers.context_assembler.worker"
+    class: "ContextAssemblerWorker"
+    enabled: true
+    config: {}
+
 interceptors:
   - module: "src.interceptors.security_interceptor.interceptor"
     class: "SecurityInterceptor"

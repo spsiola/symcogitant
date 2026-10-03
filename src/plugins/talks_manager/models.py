@@ -74,9 +74,14 @@ class TalkProfile(BaseModel):
     created_at: str
 
 class TalkSettings(BaseModel):
+    model_config = {"extra": "allow"}
+    
     # Требования к LLM
     preferred_model_tier: str = "smart"  # 'smart', 'fast', 'cheap'
     context_window_size: int = 100
+    
+    # Схема сборки контекста
+    context_schema: Optional[Dict[str, Any]] = None
     
     # Триггеры
     trigger_on_every_message: bool = False

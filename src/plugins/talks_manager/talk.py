@@ -75,7 +75,10 @@ class Talk:
                     if getattr(self.profile, "talk_type", "unknown") != real_type:
                         self.profile.talk_type = real_type
                         self._save_data()
-            except (OSError, ValueError, json.JSONDecodeError):
+            except json.JSONDecodeError as e:
+                import logging
+                logging.getLogger("Symcogitant").error(f"JSON syntax error in {self.profile_file}: {e}. Profile could not be loaded!")
+            except (OSError, ValueError):
                 pass
 
     def _load_history(self):
@@ -101,17 +104,33 @@ class Talk:
     def _save_data(self):
         # Save profile
         try:
-            with open(self.profile_file, 'w', encoding='utf-8') as f:
-                json.dump({
-                    "profile": self.profile.model_dump(),
-                    "settings": self.settings.model_dump()
-                }, f, ensure_ascii=False, indent=2)
+            settings_to_save = self.settings.model_dump()
+            profile_parse_error = False
+            if os.path.exists(self.profile_file):
+                try:
+                    with open(self.profile_file, 'r', encoding='utf-8') as f:
+                        disk_data = json.load(f)
+                        if "settings" in disk_data:
+                            # Обновляем disk_data актуальными настройками из памяти
+                            disk_data["settings"].update(settings_to_save)
+                            settings_to_save = disk_data["settings"]
+                except json.JSONDecodeError as e:
+                    import logging
+                    logging.getLogger("Symcogitant").error(f"JSON syntax error in {self.profile_file}: {e}. WILL NOT OVERWRITE PROFILE TO PREVENT DATA LOSS.")
+                    profile_parse_error = True
+                except Exception:
+                    pass
+
+            if not profile_parse_error:
+                with open(self.profile_file, 'w', encoding='utf-8') as f:
+                    json.dump({
+                        "profile": self.profile.model_dump(),
+                        "settings": settings_to_save
+                    }, f, ensure_ascii=False, indent=2)
         except OSError:
             pass
 
-        # Save history (append only approach isn't fully safe with edits/deletes,
-        # so for simplicity we rewrite the file if window isn't huge.
-        # A more robust solution uses a local DB, but JSONL rewrite is okay for 100-200 lines).
+        # Save history
         try:
             # Keep only the window size
             limit = self.settings.context_window_size * 2
@@ -333,104 +352,64 @@ class Talk:
         # 0. Динамически перезагружаем настройки из файла, чтобы подхватить изменения извне
         self._load_profile()
         
-        # 1. Собрать контекст
-        messages_to_process = self.messages[-self.settings.context_window_size:]
-        script_parts = []
-        for msg in messages_to_process:
-            sender_name = msg.sender.name
-            role_label = "Assistant (Me)" if msg.sender.is_me else f"{msg.sender.role.value.capitalize()} ({sender_name})"
-            
-            status_flags = []
-            if msg.is_deleted:
-                status_flags.append("[DELETED]")
-            if msg.is_edited:
-                status_flags.append(f"[EDITED at {msg.edited_date}]")
-            
-            flags_str = " ".join(status_flags)
-            if flags_str:
-                flags_str = " " + flags_str
-                
-            time_str = f"[{msg.date}] " if msg.date else ""
-            
-            # Реакции
-            reactions_str = ""
-            if msg.reactions:
-                reacts = ", ".join(f"{r.user_id}: {r.emoji}" for r in msg.reactions)
-                reactions_str = f"\n[Reactions: {reacts}]"
-            
-            script_parts.append(f"{time_str}{role_label}{flags_str}:\n{msg.text}{reactions_str}")
-
-        full_context = "\n\n".join(script_parts)
-        
-        # 2. Определить инструменты
-        # Извлекаем протокол из talk_id (например, "tg:priv:123" -> "tg")
         protocol = self.talk_id.split(":")[0] if ":" in self.talk_id else "unknown"
         capabilities = self.manager.transports_capabilities.get(protocol, {})
         
-        tools_list = []
-        # Базовые инструменты, зависящие от возможностей транспорта
-        if capabilities.get("can_send_text", False):
-            tools_list.append({
-                "type": "function",
-                "function": {
-                    "name": "reply_to_talk",
-                    "description": "Send a reply message back to the current chat room.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "text": {
-                                "type": "string",
-                                "description": "The text of the message to send."
-                            },
-                            "reply_to_msg_id": {
-                                "type": "string",
-                                "description": "Optional message ID to reply to."
-                            }
-                        },
-                        "required": ["text"]
+        # 1. Подготовка схемы и переменных
+        schema = getattr(self.settings, "context_schema", None)
+        if not schema:
+            system_text = f"\n\nRules for this room:\n{self.settings.system_prompt}" if self.settings.system_prompt else ""
+            schema = {
+                "system_blocks": [
+                    {
+                        "type": "dynamic",
+                        "template": "You are operating in the talk room '{title}' (Type: {talk_type}, Status: {status}).\nHere is the history of the conversation formatted as a script.\nAnalyze the context and use the available tools to respond if necessary."
+                    },
+                    {
+                        "type": "text",
+                        "text": system_text
                     }
+                ],
+                "history_blocks": {
+                    "max_messages": self.settings.context_window_size
+                },
+                "postfix_blocks": [],
+                "tools": {
+                    "allowed": self.settings.allowed_extra_tools
                 }
-            })
+            }
+            
+        variables = {
+            "title": self.profile.title,
+            "talk_type": self.profile.talk_type,
+            "status": self.profile.status.value
+        }
         
-        # Добавляем дополнительные разрешенные инструменты для комнаты
-        if hasattr(self.manager, "core") and self.manager.core and hasattr(self.manager.core, "tools_registry") and self.manager.core.tools_registry:
-            all_schemas = self.manager.core.tools_registry.get_tools_schema()
-            if all_schemas:
-                for tool_name in self.settings.allowed_extra_tools:
-                    for schema in all_schemas:
-                        if schema.get("type") == "function" and schema.get("function", {}).get("name") == tool_name:
-                            tools_list.append(schema)
+        # 2. Подготовка сообщений
+        raw_messages = [msg.model_dump(mode='json', exclude_none=True) for msg in self.messages]
         
-        # 3. Отправка запроса в шину
         request_id = f"req_{self.safe_id}_{int(datetime.now(timezone.utc).timestamp() * 1000)}"
         
-        system_prompt = (
-            f"You are operating in the talk room '{self.profile.title}' (Type: {self.profile.talk_type}, Status: {self.profile.status.value}).\n"
-            f"Here is the history of the conversation formatted as a script.\n"
-            f"Analyze the context and use the available tools to respond if necessary."
-        )
-        
-        if self.settings.system_prompt:
-            system_prompt += f"\n\nRules for this room:\n{self.settings.system_prompt}"
-        
+        # 3. Отправка запроса на сборку в шину
         request_data = {
-            "type": "llm_route_request",
+            "type": "context_assembly_request",
             "request_id": request_id,
             "talk_id": self.talk_id,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": full_context}
-            ],
-            "tools": tools_list,
-            "tier": getattr(self.settings, "preferred_model_tier", "smart"),
-            "primary_model": getattr(self.settings, "primary_model", ""),
-            "fallback_model": getattr(self.settings, "fallback_model", "")
+            "messages": raw_messages,
+            "schema": schema,
+            "variables": variables,
+            "tools_capabilities": capabilities,
+            "routing": {
+                "tier": getattr(self.settings, "preferred_model_tier", "smart"),
+                "primary_model": getattr(self.settings, "primary_model", ""),
+                "fallback_model": getattr(self.settings, "fallback_model", "")
+            }
         }
         
         await self.manager.event_bus.publish(request_data)
         # Сохраняем привязку request_id -> talk_id в менеджере
         self.manager.pending_requests[request_id] = self.talk_id
-        await self.manager.emit_log(f"Triggered LLM for {self.talk_id} with {len(messages_to_process)} msgs", "INFO")
+        await self.manager.emit_log(f"Sent context assembly request for {self.talk_id}", "INFO")
 
         # Имитация человеческой реакции (запускаем асинхронно)
         async def _human_reaction():

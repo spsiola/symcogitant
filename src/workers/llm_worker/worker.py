@@ -327,18 +327,36 @@ class LLMWorker(BaseWorker):
                 total_tokens = getattr(response.usage, "total_tokens", 0) or 0
                 
                 try:
-                    logger.info(f"Raw response usage object: {getattr(response.usage, 'model_dump', lambda: vars(response.usage))()}")
-                except Exception as e:
+                    raw_usage = getattr(response.usage, 'model_dump', lambda: vars(response.usage))()
+                    await self.emit_log(f"RAW USAGE from {model}: {raw_usage}", level="DEBUG")
+                except Exception:
                     pass
                 
                 if hasattr(response.usage, "prompt_tokens_details") and response.usage.prompt_tokens_details:
                     cache_read_tokens = getattr(response.usage.prompt_tokens_details, "cached_tokens", 0) or 0
                 
                 if hasattr(response.usage, "model_extra") and response.usage.model_extra:
+                    pt_details = response.usage.model_extra.get("prompt_tokens_details", {})
+                    if isinstance(pt_details, dict):
+                        cache_read_tokens = pt_details.get("cached_tokens", cache_read_tokens)
+                    
                     cache_read_tokens = response.usage.model_extra.get("cache_read_tokens", cache_read_tokens)
                     cache_write_tokens = response.usage.model_extra.get("cache_write_tokens", cache_write_tokens)
                     cache_read_tokens = response.usage.model_extra.get("cache_read_input_tokens", cache_read_tokens)
                     cache_write_tokens = response.usage.model_extra.get("cache_creation_input_tokens", cache_write_tokens)
+                
+                # Check directly on the dictionary if it's missing (sometimes Pydantic drops it completely from model_extra if not configured right)
+                if not cache_read_tokens:
+                    try:
+                        raw = getattr(response.usage, 'model_dump', lambda: vars(response.usage))()
+                        if isinstance(raw, dict):
+                            pt_det = raw.get("prompt_tokens_details", {})
+                            if isinstance(pt_det, dict):
+                                cache_read_tokens = pt_det.get("cached_tokens", 0)
+                            if not cache_read_tokens:
+                                cache_read_tokens = raw.get("cache_read_tokens", 0) or raw.get("cache_read_input_tokens", 0)
+                    except Exception:
+                        pass
 
             
             # --- Registry Cost Calculation & Logging ---

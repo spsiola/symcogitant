@@ -9,11 +9,56 @@ class SecurityInterceptor(BaseInterceptor):
     """
     def __init__(self, config: Dict[str, Any], event_bus: Any, core: Any = None):
         super().__init__(config, event_bus, core=core)
-        self.description = "Базовая проверка безопасности вызовов инструментов"
+        self.description = "Базовая проверка безопасности вызовов инструментов и контроль утечек (DLP)"
         self.blocked_tools = {"delete_file", "remove_file", "rm", "rmdir", "delete_directory", "delete"}
+        self.secrets_to_protect = self._load_env_secrets()
+
+    def _load_env_secrets(self) -> list:
+        secrets = []
+        env_path = os.path.abspath(os.path.join(os.getcwd(), "data", ".env"))
+        if os.path.exists(env_path):
+            with open(env_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        _, val = line.split("=", 1)
+                        val = val.strip().strip("'\"")
+                        if len(val) > 4:  # Игнорируем короткие значения типа "1" или "true"
+                            secrets.append(val)
+        return secrets
+
+    def mask_llm_payload(self, messages: list) -> bool:
+        """
+        DLP проверка: ищет совпадения значений из .env в тексте промпта.
+        Вместо блокировки заменяет секрет на маску [СКРЫТО by DLP interceptor].
+        Возвращает True, если была найдена и замаскирована утечка.
+        """
+        leaked = False
+        for msg in messages:
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                for secret in self.secrets_to_protect:
+                    if secret in content:
+                        content = content.replace(secret, "[СКРЫТО by DLP interceptor]")
+                        leaked = True
+                msg["content"] = content
+        return leaked
 
     async def on_start(self):
-        await self.emit_log("SecurityInterceptor started.")
+        self.event_bus.add_interceptor(self.intercept_event)
+        await self.emit_log("SecurityInterceptor started (DLP masking active via EventBus).")
+
+    async def intercept_event(self, event: dict) -> bool:
+        """Перехватчик событий шины (EventBus Middleware)."""
+        if event.get("type") == "llm_route_request":
+            messages = event.get("messages", [])
+            was_leaked = self.mask_llm_payload(messages)
+            if was_leaked:
+                await self.emit_log("DLP Interceptor modified the payload to hide confidential data (.env secrets).", "WARNING")
+            
+            # Мы не блокируем событие, а пропускаем его дальше (с уже замаскированным контентом)
+            return True
+        return True
 
     async def pre_tool_call(self, name: str, kwargs: Dict[str, Any]) -> Tuple[bool, str]:
         """
