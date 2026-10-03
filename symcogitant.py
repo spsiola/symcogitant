@@ -37,8 +37,51 @@ class SymcogitantCore:
         self.tools_registry = ToolsRegistry(core=self)
 
     def load_config(self) -> dict:
+        base_config = {}
         with open(self.config_path, 'r', encoding='utf-8') as f:
-            return yaml.safe_load(f)
+            base_config = yaml.safe_load(f) or {}
+            
+        data_config_path = os.path.join(os.path.dirname(__file__), "data", "config.yaml")
+        if os.path.exists(data_config_path):
+            try:
+                with open(data_config_path, 'r', encoding='utf-8') as f:
+                    data_config = yaml.safe_load(f) or {}
+                    base_config = self._deep_merge(base_config, data_config)
+            except Exception as e:
+                logger.error(f"Failed to load data/config.yaml: {e}")
+                
+        return base_config
+
+    def _deep_merge(self, base: dict, override: dict) -> dict:
+        import copy
+        result = copy.deepcopy(base)
+        for k, v in override.items():
+            if k in result and isinstance(result[k], dict) and isinstance(v, dict):
+                result[k] = self._deep_merge(result[k], v)
+            elif k in result and isinstance(result[k], list) and isinstance(v, list):
+                merged_list = []
+                base_items = {item.get('class'): item for item in result[k] if isinstance(item, dict) and 'class' in item}
+                for base_item in result[k]:
+                    if isinstance(base_item, dict) and 'class' in base_item:
+                        c_name = base_item['class']
+                        overridden_item = next((i for i in v if isinstance(i, dict) and i.get('class') == c_name), None)
+                        if overridden_item:
+                            merged_list.append(self._deep_merge(base_item, overridden_item))
+                        else:
+                            merged_list.append(base_item)
+                    else:
+                        merged_list.append(base_item)
+                for override_item in v:
+                    if isinstance(override_item, dict) and 'class' in override_item:
+                        if override_item['class'] not in base_items:
+                            merged_list.append(override_item)
+                    else:
+                        if override_item not in merged_list:
+                            merged_list.append(override_item)
+                result[k] = merged_list
+            else:
+                result[k] = copy.deepcopy(v)
+        return result
 
     def get_module(self, name: str) -> BaseModule | None:
         for m in self.all_modules:

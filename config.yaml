@@ -52,17 +52,17 @@ workers:
     class: "ModelSelectorWorker"
     enabled: true
     config:
-      routing:
-        TalksManagerPlugin:
-          default_model: "qwen2.5-coder:7b"
-          rules:
-            - condition:
-                talk_id_prefix: "tg:priv:"
-              model: "openrouter/anthropic/claude-opus-5"
-            - condition:
-                talk_id_prefix: "tg:group:-510553680" # Важная рабочая группа
-              model: "atria/Atria-Dawn-Preview"
-              api_key_name: "symcogitant"
+      tiers:
+        smart:
+          - "openrouter/anthropic/claude-opus-5"
+          - "openrouter/openai/gpt-5.6-luna"
+          - "openrouter/google/gemini-3.8-flash"
+        fast:
+          - "openrouter/anthropic/claude-3-haiku"
+          - "qwen2.5-coder:7b"
+        free:
+          - "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
+          - "qwen2.5-coder:7b"
 
 interceptors:
   - module: "src.interceptors.security_interceptor.interceptor"
@@ -99,4 +99,25 @@ plugins:
   - module: "src.plugins.talks_manager.plugin"
     class: "TalksManagerPlugin"
     enabled: true
-    config: {}
+    config:
+      talk_defaults:
+        preferred_model_tier: "smart"
+        primary_model: ""
+        fallback_model: ""
+        context_window_size: 100
+        trigger_on_every_message: false
+        trigger_on_mention: true
+        trigger_on_reply: true
+        mention_aliases: ["ИИ", "AI"]
+        background_read_interval_seconds: 300
+        append_llm_signature: false
+        llm_signature_template: "\n\n🤖 {provider}>{req_model} || {act_model} [in/cash_%/out - {in_t} / {cache_pct}% / {out_t} tokens]."
+        allowed_extra_tools: []
+        by_type:
+          priv:
+            trigger_on_every_message: true
+            system_prompt: "Ты общаешься тет-а-тет с пользователем. Отвечай прямо на каждое его сообщение."
+          group:
+            system_prompt: "Отвечай только если есть прямые вопросы и пожелания. Для того чтоб промолчать пришли [NO ANSWER]"
+          forum:
+            system_prompt: "Отвечай только если есть прямые вопросы и пожелания. Для того чтоб промолчать пришли [NO ANSWER]"

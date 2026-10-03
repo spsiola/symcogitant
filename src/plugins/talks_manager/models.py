@@ -53,6 +53,7 @@ class UniversalMessage(BaseModel):
     is_edited: bool = False
     edited_date: Optional[str] = None
     reply_to_msg_id: Optional[str] = None
+    mentions_me: bool = False
     
     # Для внутренних системных пометок агента, которые не уходят на сервер,
     # например "Агент прочитал это сообщение" или "Внутренние мысли"
@@ -67,6 +68,7 @@ class RoomMode(str, Enum):
 
 class TalkProfile(BaseModel):
     title: str = "Unknown Talk"
+    talk_type: str = "unknown"
     status: RoomMode = RoomMode.ACTIVE
     tags: List[str] = Field(default_factory=list) # e.g. ["private", "important", "public_group"]
     created_at: str
@@ -80,9 +82,23 @@ class TalkSettings(BaseModel):
     trigger_on_every_message: bool = False
     trigger_on_mention: bool = True
     trigger_on_reply: bool = True
+    mention_aliases: List[str] = Field(default_factory=list)
     
     # Регулярное чтение (Фоновый цикл)
     background_read_interval_seconds: int = 0  # 0 означает отключено
+    
+    # Системный промпт комнаты
+    system_prompt: str = ""
+    
+    # Явное указание моделей (переопределяет preferred_model_tier)
+    primary_model: str = ""
+    fallback_model: str = ""
+    
+    # Добавлять подпись с метриками LLM к сообщениям (не сохраняется в историю)
+    append_llm_signature: bool = False
+    
+    # Шаблон для подписи. Поддерживаемые ключи: {provider}, {req_model}, {act_model}, {in_t}, {cache_pct}, {out_t}
+    llm_signature_template: str = "\n\n🤖 {provider}>{req_model} || {act_model} [in/cash_%/out - {in_t} / {cache_pct}% / {out_t} tokens]."
     
     # Дополнительные инструменты (помимо базовых reply, edit и т.д.),
     # которые разрешены модели в рамках этой комнаты (например, 'get_weather', 'get_server_time')

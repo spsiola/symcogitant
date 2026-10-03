@@ -69,6 +69,6 @@ symcogitant.py - входная точка в систему, минимальн
 - **MCPManagerDaemon**: Управление внешними инструментами по стандарту Model Context Protocol.
 
 ### Воркеры (Исполнители)
-- **ModelSelectorWorker (`src/workers/model_selector`)**: Динамический маршрутизатор LLM моделей. Поддерживает логику `Smart Quarantine` (временная блокировка моделей при ошибках 429/503) и выдает оптимальную модель для каждого запроса.
-- **LLMWorker (`src/workers/llm_worker`)**: Исполнитель запросов к LLM (OpenAI, Anthropic и др.). Поддерживает tool calling и учет затраченных токенов (биллинг).
+- **ModelSelectorWorker (`src/workers/model_selector`)**: Динамический маршрутизатор LLM моделей. Поддерживает логику `Smart Quarantine` (временная блокировка моделей при ошибках 429/503) и `Cache Affinity` (удержание одной и той же модели в рамках одного диалога для экономии KV-кэша). Выдает оптимальную модель для каждого запроса, поддерживая проброс конкретных ключей (`модель#ключ`).
+- **LLMWorker (`src/workers/llm_worker`)**: Исполнитель запросов к LLM (OpenAI, Anthropic и др.). Поддерживает tool calling, динамический выбор API-ключей (переданных от ModelSelectorWorker) и учет затраченных токенов (биллинг).
 - **ToolWorker (`src/workers/tool_worker`)**: Изолированное выполнение инструментов (tools) и скриптов (`run_command`), запрошенных через LLM.

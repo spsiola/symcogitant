@@ -1,7 +1,8 @@
 import asyncio
+import json
 import os
 import time
-from datetime import UTC
+from datetime import datetime, UTC
 from typing import Any
 
 from anthropic import AsyncAnthropic
@@ -48,7 +49,7 @@ class LLMWorker(BaseWorker):
         self.event_bus.subscribe(self._handle_event)
         await self.emit_log(f"LLM Worker started. Default Base URL: {self.default_base_url}")
 
-    def _resolve_api_key(self, provider_prefix: str, api_key_name: str | None = None) -> str:
+    def _resolve_api_key(self, provider_prefix: str, api_key_name: str | None = None) -> str | None:
         """Resolves the API key from .env based on provider and optional name."""
         prefix = f"{provider_prefix.upper()}_API_KEY"
         if api_key_name and api_key_name != "default":
@@ -284,9 +285,6 @@ class LLMWorker(BaseWorker):
                     cache_read_tokens = response.usage.model_extra.get("cache_read_tokens", cache_read_tokens)
                     cache_write_tokens = response.usage.model_extra.get("cache_write_tokens", cache_write_tokens)
 
-            import json
-            import os
-            from datetime import datetime
             
             # --- Registry Cost Calculation & Logging ---
             registry_path = os.path.join(os.getcwd(), "data", "llm_registry.json")
@@ -356,7 +354,9 @@ class LLMWorker(BaseWorker):
                 "usage": {
                     "prompt_tokens": prompt_tokens,
                     "completion_tokens": completion_tokens,
-                    "total_tokens": total_tokens
+                    "total_tokens": total_tokens,
+                    "cache_read_tokens": cache_read_tokens,
+                    "cache_write_tokens": cache_write_tokens
                 },
                 "latency_sec": latency,
                 "tool_calls": tool_calls
@@ -371,5 +371,6 @@ class LLMWorker(BaseWorker):
                 "type": "llm_response_error",
                 "source": self.__class__.__name__,
                 "request_id": request_id,
+                "model": model,
                 "error": str(e)
             })

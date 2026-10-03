@@ -130,6 +130,9 @@ class TelegramTransportPlugin(BaseAgentPlugin):
                 text = msg.message or ""
                 media_placeholder = self._extract_media_placeholder(msg)
                 
+                chat = await event.get_chat()
+                chat_title = utils.get_display_name(chat) if chat else "Unknown"
+                
                 if media_placeholder:
                     text = f"{media_placeholder}\n{text}".strip()
                     
@@ -142,13 +145,19 @@ class TelegramTransportPlugin(BaseAgentPlugin):
                     "text": text,
                     "is_outgoing": getattr(msg, 'out', False),
                     "is_deleted": False,
-                    "is_edited": False
+                    "is_edited": False,
+                    "mentions_me": getattr(msg, 'mentioned', False),
+                    "reply_to_msg_id": str(msg.reply_to_msg_id) if getattr(msg, 'reply_to_msg_id', None) else None
                 }
                 
                 out_payload = {
                     "type": "talk_message_received",
                     "talk_id": talk_id,
-                    "message": univ_msg
+                    "message": univ_msg,
+                    "chat_info": {
+                        "title": chat_title,
+                        "is_forum": getattr(event.chat, 'forum', False)
+                    }
                 }
                 await self.emit_log(f"[OUTGOING EVENT_BUS] talk_message_received: {out_payload}", "DEBUG")
                 await self.event_bus.publish(out_payload)
@@ -261,6 +270,12 @@ class TelegramTransportPlugin(BaseAgentPlugin):
         if event_type == "talk_send_message":
             text = event.get("text")
             
+            if not text or "[NO ANSWER]" in text:
+                await self.emit_log(f"Message ignored due to [NO ANSWER] or empty text: {text}", "INFO")
+                # Отправляем фейковое событие, чтобы сбросить статус "печатает" (action: cancel),
+                # но так как в новой архитектуре это делается по-другому, просто выходим.
+                return
+            
             # Извлекаем chat_id из talk_id
             parts = talk_id.split(":")
             chat_id = int(parts[2])
@@ -364,7 +379,9 @@ class TelegramTransportPlugin(BaseAgentPlugin):
                     "is_deleted": False,
                     "is_edited": getattr(msg, 'edit_date', None) is not None,
                     "edited_date": msg.edit_date.isoformat() if getattr(msg, 'edit_date', None) else None,
-                    "reactions": reactions
+                    "reactions": reactions,
+                    "mentions_me": getattr(msg, 'mentioned', False),
+                    "reply_to_msg_id": str(msg.reply_to_msg_id) if getattr(msg, 'reply_to_msg_id', None) else None
                 })
                 
             messages.reverse()
