@@ -59,26 +59,25 @@ class SymcogitantCore:
             if k in result and isinstance(result[k], dict) and isinstance(v, dict):
                 result[k] = self._deep_merge(result[k], v)
             elif k in result and isinstance(result[k], list) and isinstance(v, list):
-                merged_list = []
-                base_items = {item.get('class'): item for item in result[k] if isinstance(item, dict) and 'class' in item}
-                for base_item in result[k]:
-                    if isinstance(base_item, dict) and 'class' in base_item:
+                combined = result[k] + v
+                is_class_list = bool(combined) and all(isinstance(i, dict) and 'class' in i for i in combined)
+                
+                if is_class_list:
+                    merged_list = []
+                    base_items = {item.get('class'): item for item in result[k]}
+                    for base_item in result[k]:
                         c_name = base_item['class']
-                        overridden_item = next((i for i in v if isinstance(i, dict) and i.get('class') == c_name), None)
+                        overridden_item = next((i for i in v if i.get('class') == c_name), None)
                         if overridden_item:
                             merged_list.append(self._deep_merge(base_item, overridden_item))
                         else:
                             merged_list.append(base_item)
-                    else:
-                        merged_list.append(base_item)
-                for override_item in v:
-                    if isinstance(override_item, dict) and 'class' in override_item:
+                    for override_item in v:
                         if override_item['class'] not in base_items:
                             merged_list.append(override_item)
-                    else:
-                        if override_item not in merged_list:
-                            merged_list.append(override_item)
-                result[k] = merged_list
+                    result[k] = merged_list
+                else:
+                    result[k] = copy.deepcopy(v)
             else:
                 result[k] = copy.deepcopy(v)
         return result

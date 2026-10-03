@@ -27,6 +27,7 @@ class TelegramTransportPlugin(BaseAgentPlugin):
         self.session_path = self.config.get("session_path", "data/telegram_user")
         self.client: TelegramClient | None = None
         self.my_id = None
+        self.typing_tasks: dict[str, asyncio.Task] = {}
 
     def _get_talk_id(self, chat_id, topic_id=None) -> str | None:
         if chat_id is None:
@@ -162,6 +163,30 @@ class TelegramTransportPlugin(BaseAgentPlugin):
                 await self.emit_log(f"[OUTGOING EVENT_BUS] talk_message_received: {out_payload}", "DEBUG")
                 await self.event_bus.publish(out_payload)
 
+            @self.client.on(events.UserUpdate)
+            async def user_update_handler(event):
+                if not event.user_id:
+                    return
+                # We can't always know chat_id for private chats perfectly if it's just a user update,
+                # but for private dialogs user_id == chat_id.
+                talk_id = self._get_talk_id(event.user_id)
+                
+                status_type = None
+                if event.typing:
+                    status_type = "typing"
+                elif event.online:
+                    status_type = "online"
+                elif event.recently or event.offline or event.within_months or event.within_weeks:
+                    status_type = "offline"
+                    
+                if status_type and talk_id:
+                    await self.event_bus.publish({
+                        "type": "talk_interlocutor_status",
+                        "talk_id": talk_id,
+                        "status": status_type,
+                        "user_id": str(event.user_id)
+                    })
+
             @self.client.on(events.MessageDeleted)
             async def delete_handler(event):
                 await self.emit_log(f"[INCOMING TG] MessageDeleted: chat_id={event.chat_id}, deleted_ids={event.deleted_ids}", "DEBUG")
@@ -253,7 +278,16 @@ class TelegramTransportPlugin(BaseAgentPlugin):
 
     async def stop(self):
         self.running = False
+        for task in self.typing_tasks.values():
+            task.cancel()
+        self.typing_tasks.clear()
         if self.client:
+            try:
+                from telethon.tl.functions.account import UpdateStatusRequest
+                await self.client(UpdateStatusRequest(offline=True))
+                await self.emit_log("Set offline status", "INFO")
+            except Exception as e:
+                await self.emit_log(f"Failed to set offline status: {e}", "WARNING")
             await self.client.disconnect()
         await super().stop()
 
@@ -301,6 +335,40 @@ class TelegramTransportPlugin(BaseAgentPlugin):
                 })
             except Exception as e:
                 await self.emit_log(f"Send failed: {e}", "ERROR")
+
+        elif event_type == "talk_mark_read":
+            parts = talk_id.split(":")
+            chat_id = int(parts[2])
+            try:
+                await self.client.send_read_acknowledge(chat_id)
+                await self.emit_log(f"Marked {talk_id} as read", "DEBUG")
+            except Exception as e:
+                await self.emit_log(f"Failed to mark read {talk_id}: {e}", "ERROR")
+
+        elif event_type == "talk_set_action":
+            action = event.get("action", "cancel")
+            parts = talk_id.split(":")
+            chat_id = int(parts[2])
+            
+            # Отменяем предыдущую задачу, если есть
+            if talk_id in self.typing_tasks:
+                self.typing_tasks[talk_id].cancel()
+                del self.typing_tasks[talk_id]
+                
+            if action != "cancel":
+                async def _typing_worker(peer, act):
+                    try:
+                        async with self.client.action(peer, act):
+                            # Висим в контекстном менеджере, пока нас не отменят
+                            # Telethon сам поддерживает отправку статуса каждые 5-10 секунд
+                            await asyncio.sleep(300) 
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception as e:
+                        await self.emit_log(f"Typing action error: {e}", "ERROR")
+                
+                self.typing_tasks[talk_id] = asyncio.create_task(_typing_worker(chat_id, action))
+                await self.emit_log(f"Started typing action '{action}' for {talk_id}", "DEBUG")
                 
         elif event_type == "talk_history_sync_request":
             limit = event.get("limit", 100)

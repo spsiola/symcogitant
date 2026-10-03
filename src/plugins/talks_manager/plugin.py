@@ -49,7 +49,8 @@ class TalksManagerPlugin(BaseAgentPlugin):
             "talk_message_deleted", 
             "talk_reaction_changed", 
             "talk_history_sync_response",
-            "talk_message_sent"
+            "talk_message_sent",
+            "talk_interlocutor_status"
         ]:
             talk_id = event.get("talk_id")
             if not talk_id:

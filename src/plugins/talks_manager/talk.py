@@ -213,6 +213,26 @@ class Talk:
                 self.messages.append(sys_msg)
                 await self._check_triggers(sys_msg)
 
+        elif event_type == "talk_interlocutor_status":
+            status = event.get("status")
+            user_id = event.get("user_id", "unknown")
+            
+            # Чтобы не спамить контекст, добавляем статус "печатает" только если его не было в последних 5 сообщениях
+            if status == "typing":
+                recent_typing = any(m.protocol == "system" and "печатает" in m.text for m in self.messages[-5:])
+                if not recent_typing:
+                    sys_msg = UniversalMessage(
+                        talk_id=self.talk_id,
+                        msg_id=f"sys_status_{int(datetime.now(timezone.utc).timestamp()*1000)}_{user_id}",
+                        protocol="system",
+                        date=datetime.now(timezone.utc).isoformat(),
+                        sender={"id": "system", "name": "System", "role": "admin"},
+                        text=f"[Действие пьесы] Пользователь (id: {user_id}) начал печатать...",
+                        is_outgoing=False
+                    )
+                    self.messages.append(sys_msg)
+                    dirty = True
+
         elif event_type == "talk_history_sync_response":
             raw_msgs = event.get("messages", [])
             synced_msgs = []
@@ -412,7 +432,38 @@ class Talk:
         self.manager.pending_requests[request_id] = self.talk_id
         await self.manager.emit_log(f"Triggered LLM for {self.talk_id} with {len(messages_to_process)} msgs", "INFO")
 
+        # Имитация человеческой реакции (запускаем асинхронно)
+        async def _human_reaction():
+            import random
+            
+            # Ждем перед тем, как прочитать
+            await asyncio.sleep(random.uniform(1.0, 3.0))
+            await self.manager.event_bus.publish({
+                "type": "talk_mark_read",
+                "protocol": self.talk_id.split(":")[0],
+                "talk_id": self.talk_id
+            })
+            
+            # Ждем перед тем, как начать "печатать"
+            await asyncio.sleep(random.uniform(0.5, 2.0))
+            await self.manager.event_bus.publish({
+                "type": "talk_set_action",
+                "protocol": self.talk_id.split(":")[0],
+                "talk_id": self.talk_id,
+                "action": "typing"
+            })
+            
+        asyncio.create_task(_human_reaction())
+
     async def handle_llm_response(self, event: dict):
+        # Отменяем статус "печатает"
+        await self.manager.event_bus.publish({
+            "type": "talk_set_action",
+            "protocol": self.talk_id.split(":")[0],
+            "talk_id": self.talk_id,
+            "action": "cancel"
+        })
+        
         if event.get("type") == "llm_response_error":
             error_msg = event.get("error", "Unknown error")
             await self.manager.emit_log(f"LLM Error in {self.talk_id}: {error_msg}", "ERROR")
