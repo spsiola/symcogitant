@@ -98,8 +98,25 @@ class LLMWorker(BaseWorker):
                     raise ValueError("Anthropic API key not configured")
                     
                 # Anthropic requires system prompt as a separate parameter
-                system_prompt = next((m["content"] for m in messages if m["role"] == "system"), "")
-                user_msgs = [{"role": m["role"], "content": str(m.get("content", ""))} for m in messages if m["role"] != "system"]
+                # We format it as a list of blocks to support prompt caching
+                system_text = next((m["content"] for m in messages if m["role"] == "system"), "")
+                system_prompt = [{"type": "text", "text": str(system_text), "cache_control": {"type": "ephemeral"}}] if system_text else ""
+                
+                user_msgs = []
+                non_system_msgs = [m for m in messages if m["role"] != "system"]
+                msg_count = len(non_system_msgs)
+                
+                for i, m in enumerate(non_system_msgs):
+                    text_content = str(m.get("content", ""))
+                    add_cache = False
+                    if i == msg_count - 3:
+                        add_cache = True
+                        
+                    content_block = {"type": "text", "text": text_content}
+                    if add_cache:
+                        content_block["cache_control"] = {"type": "ephemeral"}
+                    
+                    user_msgs.append({"role": m["role"], "content": [content_block]})
                 
                 create_kwargs = {
                     "model": actual_model,
@@ -125,6 +142,13 @@ class LLMWorker(BaseWorker):
                 prompt_tokens = response.usage.input_tokens
                 completion_tokens = response.usage.output_tokens
                 total_tokens = prompt_tokens + completion_tokens
+                
+                cache_creation_input_tokens = getattr(response.usage, "cache_creation_input_tokens", 0) or 0
+                cache_read_input_tokens = getattr(response.usage, "cache_read_input_tokens", 0) or 0
+                
+                setattr(response.usage, "prompt_tokens", prompt_tokens)
+                setattr(response.usage, "completion_tokens", completion_tokens)
+                setattr(response.usage, "total_tokens", total_tokens)
 
             elif model.startswith("google/"):
                 actual_model = model.replace("google/", "")
@@ -171,7 +195,31 @@ class LLMWorker(BaseWorker):
                     base_url="https://openrouter.ai/api/v1",
                     api_key=api_key
                 )
-                formatted_msgs = [{"role": m["role"], "content": str(m.get("content", ""))} for m in messages]
+                
+                formatted_msgs = []
+                system_count = sum(1 for m in messages if m["role"] == "system")
+                msg_count = len(messages)
+                
+                for i, m in enumerate(messages):
+                    role = m["role"]
+                    text_content = str(m.get("content", ""))
+                    
+                    if "anthropic/" in actual_model.lower():
+                        # Anthropic models need explicit cache_control breakpoints
+                        # We put a breakpoint on the system prompt (usually static) and on the 2nd to last message (history)
+                        add_cache = False
+                        if role == "system" and i == system_count - 1:
+                            add_cache = True
+                        elif i == msg_count - 3:
+                            add_cache = True
+                            
+                        content_block = {"type": "text", "text": text_content}
+                        if add_cache:
+                            content_block["cache_control"] = {"type": "ephemeral"}
+                            
+                        formatted_msgs.append({"role": role, "content": [content_block]})
+                    else:
+                        formatted_msgs.append({"role": role, "content": text_content})
                 
                 create_kwargs = {
                     "model": actual_model,
@@ -278,12 +326,19 @@ class LLMWorker(BaseWorker):
                 completion_tokens = getattr(response.usage, "completion_tokens", 0) or 0
                 total_tokens = getattr(response.usage, "total_tokens", 0) or 0
                 
+                try:
+                    logger.info(f"Raw response usage object: {getattr(response.usage, 'model_dump', lambda: vars(response.usage))()}")
+                except Exception as e:
+                    pass
+                
                 if hasattr(response.usage, "prompt_tokens_details") and response.usage.prompt_tokens_details:
                     cache_read_tokens = getattr(response.usage.prompt_tokens_details, "cached_tokens", 0) or 0
                 
                 if hasattr(response.usage, "model_extra") and response.usage.model_extra:
                     cache_read_tokens = response.usage.model_extra.get("cache_read_tokens", cache_read_tokens)
                     cache_write_tokens = response.usage.model_extra.get("cache_write_tokens", cache_write_tokens)
+                    cache_read_tokens = response.usage.model_extra.get("cache_read_input_tokens", cache_read_tokens)
+                    cache_write_tokens = response.usage.model_extra.get("cache_creation_input_tokens", cache_write_tokens)
 
             
             # --- Registry Cost Calculation & Logging ---
