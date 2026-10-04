@@ -110,19 +110,20 @@ plugins:
         primary_model: ""
         fallback_model: ""
         context_window_size: 100
-        trigger_on_every_message: false
+        trigger_events: []
         trigger_on_mention: true
         trigger_on_reply: true
         mention_aliases: ["ИИ", "AI"]
         debounce_delay_min: 2.0
         debounce_delay_max: 7.0
         background_read_interval_seconds: 300
+        background_read_ignore_older_than_days: 3
         append_llm_signature: false
         llm_signature_template: "\n\n🤖 {provider}>{req_model} || {act_model} [in/cash_%/out - {in_t} / {cache_pct}% / {out_t} tokens]."
         allowed_extra_tools: []
         by_type:
           priv:
-            trigger_on_every_message: true
+            trigger_events: ["talk_message_received", "talk_reaction_changed", "talk_interlocutor_status"]
             system_prompt: "Ты общаешься тет-а-тет с пользователем. Отвечай прямо на каждое его сообщение. Если это установка или снятие реакции, удаление или редактирование сообщения, реши стоит ли отвечать, и если нет, то пришли [NO ANSWER]"
           group:
             system_prompt: "Отвечай только если есть прямые вопросы и пожелания. Для того чтоб промолчать пришли [NO ANSWER]"

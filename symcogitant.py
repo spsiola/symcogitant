@@ -12,6 +12,8 @@ from src.core.tools import ToolsRegistry
 
 class ColorFormatter(logging.Formatter):
     COLORS = {
+        'DEBUG': '\033[90m',      # Gray
+        'INFO': '\033[36m',       # Cyan
         'WARNING': '\033[33m',    # Yellow
         'ERROR': '\033[31m',      # Red
         'CRITICAL': '\033[31;1m', # Bold Red

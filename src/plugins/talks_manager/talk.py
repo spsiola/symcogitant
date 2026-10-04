@@ -44,6 +44,9 @@ class Talk:
         )
         self.settings = TalkSettings(**final_defaults)
         
+        # Фоновое чтение
+        self.bg_read_task: Optional[asyncio.Task] = None
+        
         self._load_profile()
         self._load_history()
         
@@ -59,6 +62,8 @@ class Talk:
         self.debounce_task: Optional[asyncio.Task] = None
         self.queued_triggers = 0
         self._had_queued_triggers = False
+        
+        self._start_bg_read_task()
 
     def _load_profile(self):
         # Load profile
@@ -69,7 +74,7 @@ class Talk:
                     # Merge loaded data with defaults
                     self.profile = TalkProfile(**data.get("profile", {}))
                     
-                    current_settings = self.settings.model_dump() if hasattr(self.settings, 'model_dump') else self.settings.dict()
+                    current_settings = self.settings.model_dump()
                     saved_settings = data.get("settings", {})
                     for k, v in saved_settings.items():
                         current_settings[k] = v
@@ -81,11 +86,71 @@ class Talk:
                     if getattr(self.profile, "talk_type", "unknown") != real_type:
                         self.profile.talk_type = real_type
                         self._save_data()
+                        
+                    self._start_bg_read_task()
             except json.JSONDecodeError as e:
                 import logging
                 logging.getLogger("Symcogitant").error(f"JSON syntax error in {self.profile_file}: {e}. Profile could not be loaded!")
             except (OSError, ValueError):
                 pass
+                
+    def _start_bg_read_task(self):
+        interval = getattr(self.settings, "background_read_interval_seconds", 0)
+        
+        if self.bg_read_task and not self.bg_read_task.done():
+            # Задача уже работает. Цикл внутри нее сам подхватит новый интервал
+            # при следующей итерации или завершится, если интервал стал <= 0.
+            return
+            
+        if interval > 0:
+            self.bg_read_task = asyncio.create_task(self._background_read_loop())
+
+    async def _background_read_loop(self):
+        try:
+            while True:
+                interval = getattr(self.settings, "background_read_interval_seconds", 300)
+                if interval <= 0:
+                    break
+                await asyncio.sleep(interval)
+                
+                if getattr(self, "running", True) is False:
+                    break
+                    
+                if self.profile.status in [RoomMode.OBSERVER, RoomMode.FROZEN, RoomMode.DEAD]:
+                    continue
+                    
+                if self.is_llm_processing or getattr(self, 'history_sync_pending', False):
+                    continue
+                    
+                # Проверяем, не является ли диалог слишком старым
+                ignore_days = getattr(self.settings, "background_read_ignore_older_than_days", 3)
+                if ignore_days > 0 and self.messages:
+                    last_msg_date = None
+                    for m in reversed(self.messages):
+                        if m.date:
+                            last_msg_date = m.date
+                            break
+                    if last_msg_date:
+                        try:
+                            from datetime import timedelta
+                            msg_dt = datetime.fromisoformat(last_msg_date.replace("Z", "+00:00"))
+                            if datetime.now(timezone.utc) - msg_dt > timedelta(days=ignore_days):
+                                continue
+                        except Exception:
+                            pass
+                    
+                # Добавляем в историю действие о фоновом чтении (опционально, можно не писать)
+                await self.manager.emit_log(f"[{self.talk_id}] Background reading history (interval: {interval}s)", "DEBUG")
+                
+                await self.manager.event_bus.publish({
+                    "type": "talk_mark_read",
+                    "protocol": self.talk_id.split(":")[0],
+                    "talk_id": self.talk_id
+                })
+                
+                await self._trigger_llm()
+        except asyncio.CancelledError:
+            pass
 
     def _load_history(self):
         self.messages.clear()
@@ -110,14 +175,31 @@ class Talk:
     def _save_data(self):
         # Save profile
         try:
-            settings_to_save = self.settings.model_dump()
+            # Получаем дефолтные настройки для этого типа комнаты
+            talk_defaults = self.manager.config.get("talk_defaults", {})
+            base_defaults = {k: v for k, v in talk_defaults.items() if k != "by_type"}
+            type_defaults = talk_defaults.get("by_type", {}).get(self.profile.talk_type, {})
+            final_defaults = dict(base_defaults)
+            final_defaults.update(type_defaults)
+            default_settings = TalkSettings(**final_defaults)
+            
+            current_dump = self.settings.model_dump()
+            default_dump = default_settings.model_dump()
+            
+            # Сохраняем ТОЛЬКО те настройки, которые отличаются от дефолтных
+            settings_to_save = {k: v for k, v in current_dump.items() if k not in default_dump or default_dump[k] != v}
+            
             profile_parse_error = False
             if os.path.exists(self.profile_file):
                 try:
                     with open(self.profile_file, 'r', encoding='utf-8') as f:
                         disk_data = json.load(f)
                         if "settings" in disk_data:
-                            # Обновляем disk_data актуальными настройками из памяти
+                            # Удаляем из disk_data те ключи, которые теперь равны дефолтным (чтобы они не "застревали")
+                            # и обновляем оставшимися
+                            for k in list(disk_data["settings"].keys()):
+                                if k not in settings_to_save:
+                                    del disk_data["settings"][k]
                             disk_data["settings"].update(settings_to_save)
                             settings_to_save = disk_data["settings"]
                 except json.JSONDecodeError as e:
@@ -163,7 +245,7 @@ class Talk:
                 msg = UniversalMessage(**event.get("message", {}))
                 self.messages.append(msg)
                 dirty = True
-                await self._check_triggers(msg)
+                await self._check_triggers(msg, event_type)
             except Exception as e:
                 await self.manager.emit_log(f"Talk {self.talk_id} failed to parse msg: {e}", "ERROR")
                 
@@ -179,6 +261,9 @@ class Talk:
                     m.edited_date = edited_date
                     dirty = True
                     break
+            
+            if dirty:
+                await self._check_triggers(self.messages[-1], event_type)
                     
         elif event_type == "talk_message_deleted":
             msg_id = event.get("msg_id")
@@ -192,17 +277,30 @@ class Talk:
                     break
                     
             if found:
-                sys_msg = UniversalMessage(
-                    talk_id=self.talk_id,
-                    msg_id=f"sys_del_{int(datetime.now(timezone.utc).timestamp()*1000)}_{msg_id}",
-                    protocol="system",
-                    date=datetime.now(timezone.utc).isoformat(),
-                    sender={"id": "system", "name": "System", "role": "admin"},
-                    text=f"[Действие пьесы] Одно из сообщений выше было удалено.",
-                    is_outgoing=False
-                )
-                self.messages.append(sys_msg)
-                await self._check_triggers(sys_msg)
+                # Группируем системные сообщения об удалении
+                last_msg = self.messages[-1] if self.messages else None
+                if last_msg and last_msg.protocol == "system" and "удал" in last_msg.text:
+                    import re
+                    match = re.search(r'\((\d+) шт\.\)', last_msg.text)
+                    if match:
+                        count = int(match.group(1)) + 1
+                        last_msg.text = f"[Действие пьесы] Несколько сообщений выше были удалены ({count} шт.)."
+                    else:
+                        last_msg.text = f"[Действие пьесы] Несколько сообщений выше были удалены (2 шт.)."
+                    last_msg.date = datetime.now(timezone.utc).isoformat()
+                    dirty = True
+                else:
+                    sys_msg = UniversalMessage(
+                        talk_id=self.talk_id,
+                        msg_id=f"sys_del_{int(datetime.now(timezone.utc).timestamp()*1000)}_{msg_id}",
+                        protocol="system",
+                        date=datetime.now(timezone.utc).isoformat(),
+                        sender={"id": "system", "name": "System", "role": "admin"},
+                        text=f"[Действие пьесы] Одно из сообщений выше было удалено.",
+                        is_outgoing=False
+                    )
+                    self.messages.append(sys_msg)
+                await self._check_triggers(self.messages[-1], event_type)
                 
         elif event_type == "talk_reaction_changed":
             # For simplicity, replace all reactions for the message
@@ -236,7 +334,7 @@ class Talk:
                     is_outgoing=False
                 )
                 self.messages.append(sys_msg)
-                await self._check_triggers(sys_msg)
+                await self._check_triggers(sys_msg, event_type)
 
         elif event_type == "talk_interlocutor_status":
             status = event.get("status")
@@ -257,6 +355,7 @@ class Talk:
                     )
                     self.messages.append(sys_msg)
                     dirty = True
+                    await self._check_triggers(sys_msg, event_type)
 
         elif event_type == "talk_history_sync_response":
             raw_msgs = event.get("messages", [])
@@ -271,6 +370,7 @@ class Talk:
                 except ValueError:
                     pass
 
+            new_unhandled_msgs = []
             if synced_msgs:
                 synced_msg_ids = {sm.msg_id for sm in synced_msgs if sm.msg_id}
                 oldest_synced_date = min([sm.date for sm in synced_msgs if sm.date] or [""])
@@ -296,15 +396,31 @@ class Talk:
                             break
                     if not found:
                         self.messages.append(sm)
+                        if sm.date:
+                            try:
+                                from datetime import timedelta
+                                msg_dt = datetime.fromisoformat(sm.date.replace("Z", "+00:00"))
+                                if datetime.now(timezone.utc) - msg_dt < timedelta(days=1):
+                                    new_unhandled_msgs.append(sm)
+                            except Exception:
+                                pass
 
                 self.messages.sort(key=lambda x: x.date or "")
                 dirty = True
                 
             self.history_sync_pending = False
+            
+            # Триггерим реакцию на пропущенные (пока бот был оффлайн) новые сообщения
+            if synced_msgs:
+                for sm in new_unhandled_msgs:
+                    await self._check_triggers(sm, "talk_message_received")
+                    
             if getattr(self, "pending_trigger_msg", None):
                 msg = self.pending_trigger_msg
+                evt = getattr(self, "pending_trigger_event", "talk_message_received")
                 self.pending_trigger_msg = None
-                await self._check_triggers(msg)
+                self.pending_trigger_event = None
+                await self._check_triggers(msg, evt)
                 
         elif event_type == "talk_message_sent":
             try:
@@ -322,21 +438,24 @@ class Talk:
         if dirty:
             self._save_data()
 
-    async def _check_triggers(self, latest_msg: UniversalMessage):
+    async def _check_triggers(self, latest_msg: UniversalMessage, event_type: str):
         if self.profile.status in [RoomMode.OBSERVER, RoomMode.FROZEN, RoomMode.DEAD]:
             return
             
-        if self.history_sync_pending:
+        if getattr(self, 'history_sync_pending', False):
             self.pending_trigger_msg = latest_msg
+            self.pending_trigger_event = event_type
             return
 
         should_reply = False
         
-        if self.settings.trigger_on_every_message:
+        trigger_events = getattr(self.settings, "trigger_events", [])
+        
+        if event_type in trigger_events:
             should_reply = True
-        elif self.settings.trigger_on_mention and (getattr(latest_msg, 'mentions_me', False) or self._is_mentioned(latest_msg.text)):
+        elif self.settings.trigger_on_mention and event_type == "talk_message_received" and (getattr(latest_msg, 'mentions_me', False) or self._is_mentioned(latest_msg.text)):
             should_reply = True
-        elif self.settings.trigger_on_reply and latest_msg.reply_to_msg_id:
+        elif self.settings.trigger_on_reply and event_type == "talk_message_received" and latest_msg.reply_to_msg_id:
             for m in reversed(self.messages):
                 if m.msg_id == latest_msg.reply_to_msg_id:
                     if m.sender.is_me:
@@ -390,79 +509,99 @@ class Talk:
         return bool(re.search(pattern, text, flags=re.IGNORECASE))
 
     async def _trigger_llm(self):
+        if self.is_llm_processing:
+            return
+            
         self.is_llm_processing = True
         
-        # 0. Динамически перезагружаем настройки из файла, чтобы подхватить изменения извне
-        self._load_profile()
-        
-        protocol = self.talk_id.split(":")[0] if ":" in self.talk_id else "unknown"
-        capabilities = self.manager.transports_capabilities.get(protocol, {})
-        
-        # 1. Подготовка схемы и переменных
-        schema = getattr(self.settings, "context_schema", None)
-        if not schema:
-            system_text = f"\n\nRules for this room:\n{self.settings.system_prompt}" if self.settings.system_prompt else ""
-            schema = {
-                "system_blocks": [
-                    {
-                        "type": "dynamic",
-                        "template": "You are operating in the talk room '{title}' (Type: {talk_type}, Status: {status}).\nHere is the history of the conversation formatted as a script.\nAnalyze the context and use the available tools to respond if necessary."
+        try:
+            # 0. Динамически перезагружаем настройки из файла, чтобы подхватить изменения извне
+            self._load_profile()
+            
+            protocol = self.talk_id.split(":")[0] if ":" in self.talk_id else "unknown"
+            capabilities = self.manager.transports_capabilities.get(protocol, {})
+            
+            # 1. Подготовка схемы и переменных
+            schema = getattr(self.settings, "context_schema", None)
+            if not schema:
+                system_text = f"\n\nRules for this room:\n{self.settings.system_prompt}" if self.settings.system_prompt else ""
+                schema = {
+                    "system_blocks": [
+                        {
+                            "type": "dynamic",
+                            "template": "You are operating in the talk room '{title}' (Type: {talk_type}, Status: {status}).\nHere is the history of the conversation formatted as a script.\nAnalyze the context and use the available tools to respond if necessary."
+                        },
+                        {
+                            "type": "text",
+                            "text": system_text
+                        }
+                    ],
+                    "history_blocks": {
+                        "max_messages": self.settings.context_window_size
                     },
-                    {
-                        "type": "text",
-                        "text": system_text
+                    "postfix_blocks": [],
+                    "tools": {
+                        "allowed": self.settings.allowed_extra_tools
                     }
-                ],
-                "history_blocks": {
-                    "max_messages": self.settings.context_window_size
-                },
-                "postfix_blocks": [],
-                "tools": {
-                    "allowed": self.settings.allowed_extra_tools
+                }
+                
+            postfix = schema.get("postfix_blocks", [])
+            if not isinstance(postfix, list):
+                postfix = []
+                
+            if self._had_queued_triggers:
+                postfix.append({
+                    "type": "dynamic",
+                    "template": f"[Внимание] Пока вы генерировали предыдущий ответ, пользователь прислал дополнительные сообщения ({self.queued_triggers} шт.). Пожалуйста, ответьте на них с учетом вашего предыдущего ответа."
+                })
+                self._had_queued_triggers = False
+                self.queued_triggers = 0
+                
+            if self.profile.talk_type == "priv":
+                postfix.append({
+                    "type": "text",
+                    "text": "[System] Это приватный чат с пользователем. Вы обязаны ответить на его последнее сообщение."
+                })
+                
+            schema["postfix_blocks"] = postfix
+                
+            variables = {
+                "title": self.profile.title,
+                "talk_type": self.profile.talk_type,
+                "status": self.profile.status.value
+            }
+            
+            # 2. Подготовка сообщений
+            raw_messages = [msg.model_dump(mode='json', exclude_none=True) for msg in self.messages]
+            
+            request_id = f"req_{self.safe_id}_{int(datetime.now(timezone.utc).timestamp() * 1000)}"
+            
+            # 3. Отправка запроса на сборку в шину
+            request_data = {
+                "type": "context_assembly_request",
+                "request_id": request_id,
+                "talk_id": self.talk_id,
+                "messages": raw_messages,
+                "schema": schema,
+                "variables": variables,
+                "tools_capabilities": capabilities,
+                "routing": {
+                    "tier": getattr(self.settings, "preferred_model_tier", "smart"),
+                    "primary_model": getattr(self.settings, "primary_model", ""),
+                    "fallback_model": getattr(self.settings, "fallback_model", "")
                 }
             }
             
-        if self._had_queued_triggers:
-            if "postfix_blocks" not in schema:
-                schema["postfix_blocks"] = []
-            schema["postfix_blocks"].append({
-                "type": "dynamic",
-                "template": f"[Внимание] Пока вы генерировали предыдущий ответ, пользователь прислал дополнительные сообщения ({self.queued_triggers} шт.). Пожалуйста, ответьте на них с учетом вашего предыдущего ответа."
-            })
-            self._had_queued_triggers = False
-            self.queued_triggers = 0
+            await self.manager.event_bus.publish(request_data)
+            # Сохраняем привязку request_id -> talk_id в менеджере
+            self.manager.pending_requests[request_id] = self.talk_id
+            await self.manager.emit_log(f"Sent context assembly request for {self.talk_id}", "INFO")
             
-        variables = {
-            "title": self.profile.title,
-            "talk_type": self.profile.talk_type,
-            "status": self.profile.status.value
-        }
-        
-        # 2. Подготовка сообщений
-        raw_messages = [msg.model_dump(mode='json', exclude_none=True) for msg in self.messages]
-        
-        request_id = f"req_{self.safe_id}_{int(datetime.now(timezone.utc).timestamp() * 1000)}"
-        
-        # 3. Отправка запроса на сборку в шину
-        request_data = {
-            "type": "context_assembly_request",
-            "request_id": request_id,
-            "talk_id": self.talk_id,
-            "messages": raw_messages,
-            "schema": schema,
-            "variables": variables,
-            "tools_capabilities": capabilities,
-            "routing": {
-                "tier": getattr(self.settings, "preferred_model_tier", "smart"),
-                "primary_model": getattr(self.settings, "primary_model", ""),
-                "fallback_model": getattr(self.settings, "fallback_model", "")
-            }
-        }
-        
-        await self.manager.event_bus.publish(request_data)
-        # Сохраняем привязку request_id -> talk_id в менеджере
-        self.manager.pending_requests[request_id] = self.talk_id
-        await self.manager.emit_log(f"Sent context assembly request for {self.talk_id}", "INFO")
+        except Exception as e:
+            self.is_llm_processing = False
+            import traceback
+            err_str = traceback.format_exc()
+            await self.manager.emit_log(f"Error in _trigger_llm for {self.talk_id}: {e}\n{err_str}", "ERROR")
 
     async def handle_llm_response(self, event: dict):
         self.is_llm_processing = False

@@ -1033,7 +1033,7 @@ wheels = [
 
 [[package]]
 name = "symcogitant"
-version = "0.5.4"
+version = "0.7.2"
 source = { editable = "." }
 dependencies = [
     { name = "aiofiles" },

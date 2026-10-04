@@ -84,7 +84,7 @@ class TalkSettings(BaseModel):
     context_schema: Optional[Dict[str, Any]] = None
     
     # Триггеры
-    trigger_on_every_message: bool = False
+    trigger_events: List[str] = Field(default_factory=list)
     trigger_on_mention: bool = True
     trigger_on_reply: bool = True
     mention_aliases: List[str] = Field(default_factory=list)
@@ -95,6 +95,7 @@ class TalkSettings(BaseModel):
     
     # Регулярное чтение (Фоновый цикл)
     background_read_interval_seconds: int = 0  # 0 означает отключено
+    background_read_ignore_older_than_days: int = 3 # Не триггерить фон, если последние сообщения старше стольки дней
     
     # Системный промпт комнаты
     system_prompt: str = ""

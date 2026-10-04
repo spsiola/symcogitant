@@ -126,6 +126,24 @@ class TelegramTransportPlugin(BaseAgentPlugin):
             })
             
             await self.emit_log("Connected to Telegram and registered transport.", "INFO")
+            
+            try:
+                from telethon.tl.functions.account import UpdateStatusRequest
+                await self.client(UpdateStatusRequest(offline=False))
+                await self.emit_log("Set online status", "INFO")
+                
+                async def _online_loop():
+                    while getattr(self, 'running', True):
+                        await asyncio.sleep(180)
+                        try:
+                            if self.client:
+                                await self.client(UpdateStatusRequest(offline=False))
+                        except Exception:
+                            pass
+                
+                self.typing_tasks["_online_loop"] = asyncio.create_task(_online_loop())
+            except Exception as e:
+                await self.emit_log(f"Failed to set online status: {e}", "WARNING")
 
             self.outbox_task = asyncio.create_task(self._outbox_worker_loop())
 

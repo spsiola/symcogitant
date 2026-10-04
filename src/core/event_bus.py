@@ -30,4 +30,23 @@ class EventBus:
             return
         
         tasks = [asyncio.create_task(sub(event)) for sub in self.subscribers]
-        await asyncio.gather(*tasks, return_exceptions=True)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                sub_name = getattr(self.subscribers[i], '__qualname__', str(self.subscribers[i]))
+                err_msg = f"Subscriber {sub_name} raised an exception while handling event {event.get('type', 'unknown')}: {repr(result)}"
+                
+                if event.get("type") != "log":
+                    import traceback
+                    tb = "".join(traceback.format_exception(type(result), result, result.__traceback__))
+                    # Публикуем событие лога (без await, чтобы не заблокировать текущий цикл)
+                    asyncio.create_task(self.publish({
+                        "type": "log",
+                        "source": "EventBus",
+                        "level": "ERROR",
+                        "message": f"{err_msg}\n{tb}"
+                    }))
+                else:
+                    # Если упал сам обработчик логов, пишем в консоль напрямую
+                    print(f"[EventBus FATAL ERROR] {err_msg}")
