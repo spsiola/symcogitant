@@ -107,13 +107,23 @@ document.addEventListener('DOMContentLoaded', () => {
         appendLog(source, { level: 'WARNING', message: 'Connection lost. Please refresh.' });
     };
 
-    function ensureTabExists(id) {
+    function ensureTabExists(id, displayName) {
         if (tabs[id]) return;
+
+        let navContainer = tabsNav;
+        let isTalk = false;
+        if (id.includes(':')) {
+            isTalk = true;
+            navContainer = document.getElementById('talks-nav') || tabsNav;
+        }
+
+        const nameToShow = displayName || (isTalk ? '💬 ' + id : id);
 
         // Create Tab Button
         const btn = document.createElement('button');
         btn.className = 'tab-btn';
-        btn.innerHTML = `<span>${id}</span> <span class="tab-badge" style="display:none">0</span>`;
+        btn.dataset.id = id;
+        btn.innerHTML = `<span>${nameToShow}</span> <span class="tab-badge" style="display:none">0</span>`;
         btn.onclick = () => switchTab(id);
         
         // Create Content Panel
@@ -130,8 +140,7 @@ document.addEventListener('DOMContentLoaded', () => {
         content.appendChild(metricsContainer);
         content.appendChild(logContainer);
         
-        
-        tabsNav.appendChild(btn);
+        navContainer.appendChild(btn);
         tabsContentContainer.appendChild(content);
         
         tabs[id] = {
@@ -142,6 +151,22 @@ document.addEventListener('DOMContentLoaded', () => {
             unreadCount: 0,
             messages_array: []
         };
+
+        if (isTalk) {
+            const header = document.createElement('div');
+            header.className = 'chat-header-area';
+            header.style.marginBottom = '10px';
+            header.innerHTML = `
+                <div class="chat-header-left">
+                    <h3 style="margin: 0; font-size: 1.1rem;">${nameToShow}</h3>
+                    <div style="font-size: 0.8rem; color: var(--text-secondary);">${id}</div>
+                </div>
+                <div class="chat-header-buttons">
+                    <button class="chat-btn" onclick="openTalkProfileModal('${id}')">Настроить profile</button>
+                </div>
+            `;
+            logContainer.appendChild(header);
+        }
 
         if (id === 'LLMChatPlugin') {
             // Transform logContainer into chat UI
@@ -874,6 +899,119 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }, 1000);
 
+    async function fetchTalks() {
+        try {
+            const res = await fetch('/api/talks');
+            const talks = await res.json();
+            const talksNav = document.getElementById('talks-nav');
+            if (talksNav) {
+                talks.forEach(talk => {
+                    if (!tabs[talk.id]) {
+                        ensureTabExists(talk.id, '💬 ' + talk.name);
+                    } else {
+                        const span = tabs[talk.id].btn.querySelector('span:first-child');
+                        if (span) span.textContent = '💬 ' + talk.name;
+                    }
+                });
+            }
+        } catch (e) {
+            console.error('Error fetching talks:', e);
+        }
+    }
+    fetchTalks();
+    setInterval(fetchTalks, 10000);
+
+    // Settings Modal Logic
+    const settingsModal = document.getElementById('settings-modal');
+    const openSettingsBtn = document.getElementById('open-settings-btn');
+    const closeSettingsBtn = document.getElementById('close-settings-btn');
+    const saveSettingsBtn = document.getElementById('save-settings-btn');
+    const yamlEditor = document.getElementById('settings-yaml-editor');
+    
+    let currentSettingsTarget = 'config'; // 'config' or 'talk:{id}'
+
+    if (openSettingsBtn && settingsModal) {
+        openSettingsBtn.onclick = async () => {
+            currentSettingsTarget = 'config';
+            settingsModal.style.display = 'flex';
+            document.getElementById('settings-title').textContent = 'Общие настройки';
+            try {
+                const res = await fetch('/api/config');
+                const configData = await res.json();
+                
+                yamlEditor.style.display = 'block';
+                yamlEditor.value = Object.keys(configData.user).length > 0 ? JSON.stringify(configData.user, null, 2) : '{\n  \n}';
+                
+                const nav = document.getElementById('settings-nav');
+                nav.innerHTML = '<button class="settings-nav-item active">Общие настройки (data/config.yaml)</button>';
+            } catch(e) {
+                console.error(e);
+            }
+        };
+        
+        closeSettingsBtn.onclick = () => {
+            settingsModal.style.display = 'none';
+        };
+        
+        settingsModal.onmousedown = (e) => {
+            if (e.target === settingsModal) {
+                settingsModal.style.display = 'none';
+            }
+        };
+        
+        saveSettingsBtn.onclick = async () => {
+            try {
+                const val = yamlEditor.value.trim() || '{}';
+                const data = JSON.parse(val);
+                
+                if (currentSettingsTarget === 'config') {
+                    const res = await fetch('/api/config', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(data)
+                    });
+                    if (res.ok) {
+                        alert('Настройки сохранены! Потребуется перезапуск демонов.');
+                        settingsModal.style.display = 'none';
+                    }
+                } else if (currentSettingsTarget.startsWith('talk:')) {
+                    const talkId = currentSettingsTarget.substring(5);
+                    const res = await fetch('/api/talk_profile?talk_id=' + encodeURIComponent(talkId), {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(data)
+                    });
+                    if (res.ok) {
+                        alert('Профиль сохранен и перезагружен.');
+                        settingsModal.style.display = 'none';
+                    }
+                }
+            } catch (e) {
+                alert('Ошибка JSON: ' + e.message + '\nПожалуйста, используйте корректный формат JSON.');
+            }
+        };
+    }
+
+    // Expose openTalkProfileModal to global
+    window.openTalkProfileModal = async function(talkId) {
+        currentSettingsTarget = 'talk:' + talkId;
+        settingsModal.style.display = 'flex';
+        document.getElementById('settings-title').textContent = 'Профиль: ' + talkId;
+        
+        const nav = document.getElementById('settings-nav');
+        nav.innerHTML = '<button class="settings-nav-item active">Настройки комнаты</button>';
+        
+        try {
+            const res = await fetch('/api/talk_profile?talk_id=' + encodeURIComponent(talkId));
+            const profileData = await res.json();
+            
+            yamlEditor.style.display = 'block';
+            yamlEditor.value = JSON.stringify(profileData, null, 2);
+        } catch(e) {
+            console.error(e);
+            yamlEditor.value = '{\n  "error": "Could not load profile"\n}';
+        }
+    };
 });
 
 

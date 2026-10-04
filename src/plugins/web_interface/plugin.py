@@ -2,7 +2,7 @@ import asyncio
 import os
 
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -25,6 +25,99 @@ class WebInterfacePlugin(BasePlugin):
         @self.app.get("/")
         async def read_index():
             return FileResponse(os.path.join(static_dir, "index.html"))
+
+        @self.app.get("/api/config")
+        async def get_config():
+            import yaml
+            try:
+                with open("config.yaml", "r", encoding="utf-8") as f:
+                    defaults = yaml.safe_load(f) or {}
+            except FileNotFoundError:
+                defaults = {}
+            try:
+                with open("data/config.yaml", "r", encoding="utf-8") as f:
+                    user = yaml.safe_load(f) or {}
+            except FileNotFoundError:
+                user = {}
+            return {"defaults": defaults, "user": user}
+
+        @self.app.post("/api/config")
+        async def save_config(request: Request):
+            import yaml
+            data = await request.json()
+            os.makedirs("data", exist_ok=True)
+            with open("data/config.yaml", "w", encoding="utf-8") as f:
+                yaml.dump(data, f, allow_unicode=True, default_flow_style=False)
+            return {"status": "ok"}
+
+        @self.app.get("/api/talks")
+        async def get_talks():
+            import json
+            talks = []
+            base_dir = "data/talks"
+            if not os.path.exists(base_dir):
+                return talks
+            for protocol in os.listdir(base_dir):
+                protocol_path = os.path.join(base_dir, protocol)
+                if not os.path.isdir(protocol_path): continue
+                for talk_type in os.listdir(protocol_path):
+                    type_path = os.path.join(protocol_path, talk_type)
+                    if not os.path.isdir(type_path): continue
+                    for room_id in os.listdir(type_path):
+                        room_path = os.path.join(type_path, room_id)
+                        profile_path = os.path.join(room_path, "profile.json")
+                        if os.path.isfile(profile_path):
+                            try:
+                                with open(profile_path, "r", encoding="utf-8") as f:
+                                    profile_data = json.load(f)
+                                title = profile_data.get("profile", {}).get("title", f"{protocol} {room_id}")
+                                talks.append({
+                                    "id": f"{protocol}:{talk_type}:{room_id}",
+                                    "protocol": protocol,
+                                    "talk_type": talk_type,
+                                    "room_id": room_id,
+                                    "name": title
+                                })
+                            except Exception as e:
+                                pass
+            return talks
+
+        @self.app.get("/api/talk_profile")
+        async def get_talk_profile(talk_id: str):
+            import json
+            parts = talk_id.split(":")
+            if len(parts) < 3: raise HTTPException(status_code=400, detail="Invalid talk_id")
+            protocol, talk_type = parts[0], parts[1]
+            room_id = ":".join(parts[2:])
+            profile_path = f"data/talks/{protocol}/{talk_type}/{room_id}/profile.json"
+            if not os.path.exists(profile_path):
+                raise HTTPException(status_code=404, detail="Profile not found")
+            with open(profile_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+
+        @self.app.post("/api/talk_profile")
+        async def save_talk_profile(talk_id: str, request: Request):
+            import json
+            parts = talk_id.split(":")
+            if len(parts) < 3: raise HTTPException(status_code=400, detail="Invalid talk_id")
+            protocol, talk_type = parts[0], parts[1]
+            room_id = ":".join(parts[2:])
+            data = await request.json()
+            profile_path = f"data/talks/{protocol}/{talk_type}/{room_id}/profile.json"
+            os.makedirs(os.path.dirname(profile_path), exist_ok=True)
+            with open(profile_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            
+            # Publish event so TalksManager can hot-reload
+            asyncio.create_task(self.event_bus.publish({
+                "type": "talk_profile_updated",
+                "talk_id": talk_id,
+                "protocol": protocol,
+                "room_id": room_id,
+                "source": "WebInterfacePlugin"
+            }))
+            return {"status": "ok"}
+
 
         @self.app.websocket("/ws/logs")
         async def websocket_logs(websocket: WebSocket):
