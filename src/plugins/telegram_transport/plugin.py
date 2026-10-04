@@ -4,8 +4,11 @@ from dotenv import load_dotenv
 from telethon import TelegramClient, events, utils
 from telethon.tl.types import ReactionEmoji, UpdateMessageReactions
 from telethon.tl.functions.messages import SendReactionRequest
+from telethon.tl import functions as tl_functions, types as tl_types
+from telethon.errors import FloodWaitError
 
 from src.core.base import BaseAgentPlugin
+from .outbox import TelegramOutbox
 
 class TelegramTransportPlugin(BaseAgentPlugin):
     """
@@ -28,6 +31,9 @@ class TelegramTransportPlugin(BaseAgentPlugin):
         self.client: TelegramClient | None = None
         self.my_id = None
         self.typing_tasks: dict[str, asyncio.Task] = {}
+        
+        self.outbox = TelegramOutbox()
+        self.outbox_task = None
 
     def _get_talk_id(self, chat_id, topic_id=None) -> str | None:
         if chat_id is None:
@@ -120,6 +126,8 @@ class TelegramTransportPlugin(BaseAgentPlugin):
             })
             
             await self.emit_log("Connected to Telegram and registered transport.", "INFO")
+
+            self.outbox_task = asyncio.create_task(self._outbox_worker_loop())
 
             @self.client.on(events.NewMessage)
             async def new_message_handler(event):
@@ -278,6 +286,9 @@ class TelegramTransportPlugin(BaseAgentPlugin):
 
     async def stop(self):
         self.running = False
+        if self.outbox_task:
+            self.outbox_task.cancel()
+            
         for task in self.typing_tasks.values():
             task.cancel()
         self.typing_tasks.clear()
@@ -315,26 +326,9 @@ class TelegramTransportPlugin(BaseAgentPlugin):
             chat_id = int(parts[2])
             topic_id = int(parts[4]) if len(parts) > 4 and parts[3] == "topic" else None
             
-            try:
-                # Отправка сообщения
-                sent_msg = await self.client.send_message(chat_id, text, reply_to=topic_id)
-                
-                # Публикация подтверждения (опционально)
-                await self.event_bus.publish({
-                    "type": "talk_message_sent",
-                    "talk_id": talk_id,
-                    "message": {
-                        "talk_id": talk_id,
-                        "msg_id": str(sent_msg.id),
-                        "protocol": "tg",
-                        "date": sent_msg.date.isoformat(),
-                        "sender": {"id": str(self.my_id), "name": self.my_name, "role": "assistant", "is_me": True},
-                        "text": text,
-                        "is_outgoing": True
-                    }
-                })
-            except Exception as e:
-                await self.emit_log(f"Send failed: {e}", "ERROR")
+            # Отправляем задачу в Outbox
+            intent_id = self.outbox.add_intent(chat_id, text, reply_to=topic_id)
+            await self.emit_log(f"Message queued in Outbox: {intent_id} (chat={chat_id})", "DEBUG")
 
         elif event_type == "talk_mark_read":
             parts = talk_id.split(":")
@@ -462,3 +456,81 @@ class TelegramTransportPlugin(BaseAgentPlugin):
             })
         except Exception as e:
             await self.emit_log(f"Sync history failed for {talk_id}: {e}", "ERROR")
+
+    async def _outbox_worker_loop(self):
+        while getattr(self, 'running', True):
+            try:
+                due = self.outbox.get_due_intents()
+                for intent in due:
+                    intent_id = intent["id"]
+                    chat_id = intent["chat_id"]
+                    text = intent["text"]
+                    reply_to = intent["reply_to"]
+                    random_id = self.outbox.stable_random_id(intent_id)
+                    
+                    try:
+                        await self.emit_log(f"Outbox sending {intent_id} to {chat_id} (Attempt {intent.get('attempts', 0) + 1})", "DEBUG")
+                        input_entity = await self.client.get_input_entity(chat_id)
+                        
+                        # Парсим markdown (жирный, курсив) перед отправкой
+                        parsed, formatting_entities = await self.client._parse_message_text(str(text), "md")
+                        
+                        input_reply = (tl_types.InputReplyToMessage(reply_to_msg_id=int(reply_to))
+                                       if reply_to is not None else None)
+                                       
+                        request = tl_functions.messages.SendMessageRequest(
+                            peer=input_entity,
+                            message=parsed,
+                            entities=formatting_entities,
+                            no_webpage=False,
+                            reply_to=input_reply,
+                            random_id=random_id,
+                        )
+                        
+                        response = await self.client(request)
+                        
+                        if isinstance(response, tl_types.UpdateShortSentMessage):
+                            msg_id = response.id
+                            msg_date = response.date
+                        else:
+                            sent_msg = self.client._get_response_message(request, response, input_entity)
+                            msg_id = sent_msg.id
+                            msg_date = sent_msg.date
+                        
+                        self.outbox.mark_accepted(intent_id)
+                        await self.emit_log(f"Outbox sent {intent_id} successfully (msg_id: {msg_id})", "INFO")
+                        
+                        # Публикация подтверждения (как было раньше)
+                        talk_id = self._get_talk_id(chat_id, topic_id=reply_to)
+                        if talk_id:
+                            await self.event_bus.publish({
+                                "type": "talk_message_sent",
+                                "talk_id": talk_id,
+                                "message": {
+                                    "talk_id": talk_id,
+                                    "msg_id": str(msg_id),
+                                    "protocol": "tg",
+                                    "date": msg_date.isoformat() if msg_date else None,
+                                    "sender": {"id": str(self.my_id), "name": self.my_name, "role": "assistant", "is_me": True},
+                                    "text": text,
+                                    "is_outgoing": True
+                                }
+                            })
+                            
+                    except FloodWaitError as e:
+                        await self.emit_log(f"Outbox rate limited on {intent_id}, wait {e.seconds}s", "WARNING")
+                        self.outbox.mark_retry(intent_id, str(e), flood_wait_seconds=e.seconds)
+                        # Прерываем цикл обработки, чтобы выждать общий rate limit,
+                        # хотя можно и продолжить для других чатов, но лучше уснуть
+                        break
+                        
+                    except Exception as e:
+                        await self.emit_log(f"Outbox failed on {intent_id}: {e}", "ERROR")
+                        self.outbox.mark_retry(intent_id, str(e))
+                
+                await asyncio.sleep(1)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                await self.emit_log(f"Outbox worker loop error: {e}", "ERROR")
+                await asyncio.sleep(5)
