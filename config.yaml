@@ -1,4 +1,5 @@
 core:
+  # Интервал (в секундах) для отправки пингов watchdog (проверка жизнедеятельности плагинов/демонов)
   watchdog_interval: 30
 
 daemons:
@@ -6,13 +7,16 @@ daemons:
     class: "SystemMonitorDaemon"
     enabled: true
     config:
+      # Интервал опроса системных ресурсов и статусов LLM (в секундах)
       interval: 60
+      # Локальные эндпоинты для проверки доступности моделей
       llm_endpoints:
         ollama: "http://127.0.0.1:11434/v1/models"
         lm_studio: "http://localhost:1234/v1/models"
 #        llama_cpp: "http://localhost:8080/v1/models"
 #        vllm: "http://localhost:8000/v1/models"
 #        jan: "http://localhost:1337/v1/models"
+      # Список моделей из OpenRouter для отслеживания цен и статуса
       openrouter_popular_models:
         - "openrouter/openai/gpt-5.6-luna"
         - "openrouter/anthropic/claude-opus-5"
@@ -26,6 +30,7 @@ daemons:
     class: "FileLoggerDaemon"
     enabled: true
     config:
+      # Типы событий EventBus, которые не будут записываться в файловые логи
       ignored_types: ["harness_status", "metric"]
 
   - module: "src.daemons.mcp_manager.daemon"
@@ -43,15 +48,22 @@ workers:
     class: "LLMWorker"
     enabled: true
     config:
+      # Базовый URL для локальных LLM (fallback)
       base_url: "http://127.0.0.1:11434/v1"
+      # Имя ключа для локальных API (если требуется)
       api_key: "ollama"
+      # Модель, используемая по умолчанию, если не выбрана ни одна из тиров
       default_model: "qwen2.5-coder:7b"
+      # Размер контекстного окна LLM по умолчанию (в токенах)
       num_ctx: 8192
 
   - module: "src.workers.model_selector.worker"
     class: "ModelSelectorWorker"
     enabled: true
     config:
+      # Время (в секундах) на которое модель попадает в карантин при ошибках (429, 503)
+      quarantine_time_sec: 300
+      # Уровни моделей (tiers) для маршрутизации
       tiers:
         smart:
           - "openrouter/anthropic/claude-opus-5"
@@ -75,6 +87,7 @@ interceptors:
     enabled: true
     config: {}
 
+# Конфигурация серверов Model Context Protocol (MCP)
 mcp_servers:
   weather:
     command: ".venv/bin/python"
@@ -86,41 +99,63 @@ plugins:
     class: "WebInterfacePlugin"
     enabled: true
     config:
+      # Хост, на котором поднимается FastAPI сервер Web UI
       host: "127.0.0.1"
+      # Порт сервера Web UI
       port: 4217
 
   - module: "src.plugins.telegram_transport.plugin"
     class: "TelegramTransportPlugin"
     enabled: true
     config:
+      # Путь для сохранения сессии Telethon
       session_path: "data/telegram_user"
 
   - module: "src.plugins.llm_chat.plugin"
     class: "LLMChatPlugin"
     enabled: true
     config:
+      # Максимальное количество последовательных вызовов инструментов агентом
       max_tool_iterations: 3
 
   - module: "src.plugins.talks_manager.plugin"
     class: "TalksManagerPlugin"
     enabled: true
     config:
+      # Глобальные настройки по умолчанию для всех диалогов (Talks)
       talk_defaults:
+        # Предпочитаемый класс/уровень моделей (smart, fast, free)
         preferred_model_tier: "smart"
+        # Конкретная модель (если указана, приоритетнее tier)
         primary_model: ""
+        # Резервная модель на случай недоступности основной
         fallback_model: ""
+        # Количество последних сообщений, удерживаемых в памяти (Sliding Window)
         context_window_size: 100
+        # Список событий EventBus, триггерящих запрос к LLM (оставлять пустым для глобального дефолта)
         trigger_events: []
+        # Реагировать ли на прямое упоминание в сообщении
         trigger_on_mention: true
+        # Реагировать ли на reply (ответ) на сообщение бота
         trigger_on_reply: true
+        # Алиасы (имена), по которым бот понимает, что обращаются к нему
         mention_aliases: ["ИИ", "AI"]
+        # Минимальная задержка перед пометкой "прочитано" и "печатает" (сек) - Debouncing
         debounce_delay_min: 2.0
+        # Максимальная задержка перед пометкой "прочитано" и "печатает" (сек)
         debounce_delay_max: 7.0
+        # Интервал (в сек) для фонового "пробуждения" и обдумывания, даже если нет новых сообщений
         background_read_interval_seconds: 300
+        # Прекращать фоновое чтение комнаты, если последнее сообщение старше X дней
         background_read_ignore_older_than_days: 3
+        # Добавлять ли техническую подпись от LLM в конец ответа бота
         append_llm_signature: false
+        # Шаблон подписи (можно использовать плейсхолдеры провайдера, модели, токенов, % кэша)
         llm_signature_template: "\n\n🤖 {provider}>{req_model} || {act_model} [in/cash_%/out - {in_t} / {cache_pct}% / {out_t} tokens]."
+        # Разрешенные дополнительные инструменты (tools) для конкретных комнат
         allowed_extra_tools: []
+        
+        # Переопределение параметров в зависимости от типа чата (приватный, группа, форум)
         by_type:
           priv:
             trigger_events: ["talk_message_received", "talk_reaction_changed", "talk_interlocutor_status"]
