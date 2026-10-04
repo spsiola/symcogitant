@@ -89,6 +89,10 @@ class TalkSettings(BaseModel):
     trigger_on_reply: bool = True
     mention_aliases: List[str] = Field(default_factory=list)
     
+    # Дебаунсинг и человекоподобные задержки (в секундах)
+    debounce_delay_min: float = 2.0
+    debounce_delay_max: float = 7.0
+    
     # Регулярное чтение (Фоновый цикл)
     background_read_interval_seconds: int = 0  # 0 означает отключено
     

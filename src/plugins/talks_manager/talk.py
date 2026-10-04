@@ -53,6 +53,12 @@ class Talk:
         # History sync state
         self.history_sync_pending = True
         self.pending_trigger_msg: Optional[UniversalMessage] = None
+        
+        # Дебаунсинг и очередь обработки
+        self.is_llm_processing = False
+        self.debounce_task: Optional[asyncio.Task] = None
+        self.queued_triggers = 0
+        self._had_queued_triggers = False
 
     def _load_profile(self):
         # Load profile
@@ -338,7 +344,42 @@ class Talk:
                     break
         
         if should_reply:
+            if self.is_llm_processing:
+                self.queued_triggers += 1
+                return
+                
+            if self.debounce_task and not self.debounce_task.done():
+                self.debounce_task.cancel()
+                
+            self.debounce_task = asyncio.create_task(self._debounced_trigger())
+
+    async def _debounced_trigger(self):
+        try:
+            import random
+            delay = random.uniform(self.settings.debounce_delay_min, self.settings.debounce_delay_max)
+            
+            # 1. Ждем примерно 30% времени перед тем, как "прочитать" сообщение
+            await asyncio.sleep(delay * 0.3)
+            await self.manager.event_bus.publish({
+                "type": "talk_mark_read",
+                "protocol": self.talk_id.split(":")[0],
+                "talk_id": self.talk_id
+            })
+            
+            # 2. Ждем еще 40% времени и "начинаем печатать"
+            await asyncio.sleep(delay * 0.4)
+            await self.manager.event_bus.publish({
+                "type": "talk_set_action",
+                "protocol": self.talk_id.split(":")[0],
+                "talk_id": self.talk_id,
+                "action": "typing"
+            })
+            
+            # 3. Ждем оставшиеся 30% и вызываем LLM
+            await asyncio.sleep(delay * 0.3)
             await self._trigger_llm()
+        except asyncio.CancelledError:
+            pass
 
     def _is_mentioned(self, text: str) -> bool:
         if not text or not self.settings.mention_aliases:
@@ -349,6 +390,8 @@ class Talk:
         return bool(re.search(pattern, text, flags=re.IGNORECASE))
 
     async def _trigger_llm(self):
+        self.is_llm_processing = True
+        
         # 0. Динамически перезагружаем настройки из файла, чтобы подхватить изменения извне
         self._load_profile()
         
@@ -378,6 +421,16 @@ class Talk:
                     "allowed": self.settings.allowed_extra_tools
                 }
             }
+            
+        if self._had_queued_triggers:
+            if "postfix_blocks" not in schema:
+                schema["postfix_blocks"] = []
+            schema["postfix_blocks"].append({
+                "type": "dynamic",
+                "template": f"[Внимание] Пока вы генерировали предыдущий ответ, пользователь прислал дополнительные сообщения ({self.queued_triggers} шт.). Пожалуйста, ответьте на них с учетом вашего предыдущего ответа."
+            })
+            self._had_queued_triggers = False
+            self.queued_triggers = 0
             
         variables = {
             "title": self.profile.title,
@@ -411,30 +464,9 @@ class Talk:
         self.manager.pending_requests[request_id] = self.talk_id
         await self.manager.emit_log(f"Sent context assembly request for {self.talk_id}", "INFO")
 
-        # Имитация человеческой реакции (запускаем асинхронно)
-        async def _human_reaction():
-            import random
-            
-            # Ждем перед тем, как прочитать
-            await asyncio.sleep(random.uniform(1.0, 3.0))
-            await self.manager.event_bus.publish({
-                "type": "talk_mark_read",
-                "protocol": self.talk_id.split(":")[0],
-                "talk_id": self.talk_id
-            })
-            
-            # Ждем перед тем, как начать "печатать"
-            await asyncio.sleep(random.uniform(0.5, 2.0))
-            await self.manager.event_bus.publish({
-                "type": "talk_set_action",
-                "protocol": self.talk_id.split(":")[0],
-                "talk_id": self.talk_id,
-                "action": "typing"
-            })
-            
-        asyncio.create_task(_human_reaction())
-
     async def handle_llm_response(self, event: dict):
+        self.is_llm_processing = False
+        
         # Отменяем статус "печатает"
         await self.manager.event_bus.publish({
             "type": "talk_set_action",
@@ -446,6 +478,7 @@ class Talk:
         if event.get("type") == "llm_response_error":
             error_msg = event.get("error", "Unknown error")
             await self.manager.emit_log(f"LLM Error in {self.talk_id}: {error_msg}", "ERROR")
+            self._check_post_llm_queue()
             return
             
         reply_text = event.get("reply", "").strip()
@@ -508,6 +541,7 @@ class Talk:
                 
         if not tool_calls:
             # Нет вызовов инструментов для дальнейшей обработки
+            self._check_post_llm_queue()
             return
             
         for call in tool_calls:
@@ -544,3 +578,12 @@ class Talk:
             elif name in self.settings.allowed_extra_tools:
                 # Если вызван дополнительный тулз, мы перенаправляем его запрос в шину (например, mcp_request)
                 pass
+
+        self._check_post_llm_queue()
+
+    def _check_post_llm_queue(self):
+        if self.queued_triggers > 0:
+            self._had_queued_triggers = True
+            if self.debounce_task and not self.debounce_task.done():
+                self.debounce_task.cancel()
+            self.debounce_task = asyncio.create_task(self._debounced_trigger())

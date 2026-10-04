@@ -114,6 +114,8 @@ plugins:
         trigger_on_mention: true
         trigger_on_reply: true
         mention_aliases: ["ИИ", "AI"]
+        debounce_delay_min: 2.0
+        debounce_delay_max: 7.0
         background_read_interval_seconds: 300
         append_llm_signature: false
         llm_signature_template: "\n\n🤖 {provider}>{req_model} || {act_model} [in/cash_%/out - {in_t} / {cache_pct}% / {out_t} tokens]."
